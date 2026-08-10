@@ -15,6 +15,12 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # Windows ランナーの既定コンソールコードページ（cp1252）は日本語を表現できず、
+      # packaging/build.py の日本語 print() が UnicodeEncodeError で落ちるため、
+      # Python の入出力を強制的に UTF-8 にする（日本語Windowsの開発機では cp932 で
+      # 表現できてしまうため、ここでしか再現しない問題だった）。
+      PYTHONUTF8: "1"
     steps:
       - name: チェックアウト
         uses: actions/checkout@v4
