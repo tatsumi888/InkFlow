@@ -179,6 +179,18 @@ onefile は起動のたびに一時ディレクトリへ全体を展開するた
 
 ビルドの最後に生成物を実際に起動し、`selftest`（PDF読み込み → 画像処理 → EPUB書き出し → Qt初期化）が通ることを確認する。パッケージングで最も起きやすい「隠れた依存の取りこぼし」は、起動してみるまで分からないため。
 
+### GitHub Actions でビルドする
+
+バージョンタグ（`v1.0.0` など）を push すると、`.github/workflows/build.yml` が Windows ランナー上でテスト → onedir → onefile の順にビルドし、**GitHub Release に配布用ZIPと実行ファイル2本を添付する**。手動実行（Actions タブから `workflow_dispatch`）もでき、そちらはアーティファクトとして取得できる（Release は作らない）。
+
+```powershell
+# inkflow/__init__.py の __version__ を更新してから
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+タグのバージョンと `inkflow.__version__` が一致しないとビルドが失敗する（Release名とZIPのファイル名が食い違うのを防ぐため）。
+
 ### 配布したあと
 
 - ZIP を展開したフォルダをそのままコピーすれば動く。インストール不要。

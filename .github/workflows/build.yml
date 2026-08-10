@@ -1,0 +1,84 @@
+name: Build
+
+# バージョンタグ（v1.0.0 など）を push すると配布物を作り GitHub Release に添付する。
+# workflow_dispatch は手動実行用（アーティファクトのみ、Release は作らない）。
+# packaging/build.py をそのまま呼ぶだけで、ビルドの実体はローカルと共有する。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: チェックアウト
+        uses: actions/checkout@v4
+
+      - name: Python のセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: 依存関係のインストール
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # タグ push のときだけ、タグとパッケージのバージョン表記がずれていないか確認する。
+      # ずれたまま配布すると、Release名とZIPのファイル名の版が食い違って紛らわしいため。
+      - name: タグとバージョンの整合確認
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}" -replace '^v', ''
+          $pkgVersion = python -c "from inkflow import __version__; print(__version__, end='')"
+          if ($tagVersion -ne $pkgVersion) {
+            Write-Error "タグ ($tagVersion) と inkflow.__version__ ($pkgVersion) が一致しません。inkflow/__init__.py の __version__ を更新してください。"
+            exit 1
+          }
+          Write-Host "バージョン確認OK: $pkgVersion"
+
+      # ビルドより先にテストを通す。壊れた状態のまま配布物を作らないためのゲート。
+      - name: テスト
+        run: pytest -q
+
+      - name: ビルド（onedir・配布用ZIP込み）
+        run: python packaging/build.py --onedir
+
+      - name: ビルド（onefile）
+        run: python packaging/build.py --onefile
+
+      # onedir の展開済みフォルダ（dist/InkFlow/）はZIPの中身と重複するので含めない。
+      - name: アーティファクトをアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: InkFlow-${{ github.ref_name }}
+          path: |
+            dist/*.zip
+            dist/InkFlow.exe
+            dist/InkFlow-cli.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      # 同じタグでの再実行でも失敗しないよう、無ければ作成、あれば --clobber で上書きする。
+      - name: リリースを作成し配布物を添付
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $exists = gh release view $tag 2>$null
+          if (-not $exists) {
+            gh release create $tag --title "InkFlow $tag" --generate-notes
+          }
+          gh release upload $tag dist/*.zip dist/InkFlow.exe dist/InkFlow-cli.exe --clobber

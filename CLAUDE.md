@@ -29,6 +29,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 .venv\Scripts\python.exe -m inkflow.cli selftest                  # この環境で動くかの自己診断
 ```
 
+配布物は `v*` タグを push すると `.github/workflows/build.yml` が GitHub Actions（windows-latest）上でビルドし、GitHub Release に添付する（`gh release` コマンドを使用、サードパーティActionは使わない）。タグと `inkflow.__version__` が一致しないと失敗する。手動実行（`workflow_dispatch`）はアーティファクトのみでRelease は作らない。push・PRごとに走る汎用CIは意図的に設けていない（ビルド自体がテストゲートを内蔵している）。
+
 `pytest.ini` が `pythonpath = .` を前提にしているので、必ずリポジトリルートで実行する。lint / 型チェックのスクリプトは設けていない。**検証コマンドは `pytest` のみ**。
 
 ## アーキテクチャ
