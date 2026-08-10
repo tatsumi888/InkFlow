@@ -123,6 +123,13 @@ file_menu = menu_bar.actions()[0].menu()
 action = file_menu.actions()[0]
 ```
 
+### 6-4. `BuildWorker` を実際に起動するテストは後始末を徹底する
+
+GUIテストで `export_epub()` 等を通して本物の `BuildWorker`（`QThread`）を起動すると、`worker.wait()` でスレッドの終了は待てても、`succeeded`/`finished` シグナルの配送（キュー投函されたイベント）は**そのテストの中では処理されない**。処理されないまま `window` が破棄（`deleteLater()`）されると、シグナルは配送先を失ったままイベントキューに残り、**後続の別テストが `qapp.processEvents()` を呼んだ瞬間に配送されて `Windows fatal exception: code 0xc0000374`（ヒープ破損）でプロセスごと落ちる**。実際に踏んだ。
+
+- ワーカーの完了そのものを検証したいテストは、`worker.wait()` の後に必ず `qapp.processEvents()` を呼んでキューを空にする（`test_build_worker_produces_epub` を参照）。
+- 完了までは不要で「呼び出した時点の同期的な副作用」だけを見たいテストは、`monkeypatch.setattr(BuildWorker, "start", lambda self: None)` でスレッド自体を起動しない。
+
 ### 7. GUI に入力ウィジェットを置かない
 
 数字キー（`1`〜`7`）をレイアウト選択のショートカットに割り当てているため、メインウィンドウに `QLineEdit` を置くと入力を奪われる。テキスト入力は必ずモーダルダイアログ（`BookSettingsDialog` / `QInputDialog`）側に置く。

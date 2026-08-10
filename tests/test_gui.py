@@ -614,6 +614,209 @@ def test_empty_window_shows_hint(qapp):
         win.deleteLater()
 
 
+# ---- ダイアログの既定フォルダ -------------------------------------------
+
+
+def test_default_dialog_dir_empty_without_articles_or_history(qapp):
+    win = MainWindow(Project())
+    try:
+        assert win._default_dialog_dir() == ""
+    finally:
+        win.preview_cache.close()
+        win.deleteLater()
+
+
+def test_default_dialog_dir_falls_back_to_latest_article_folder(window):
+    expected = str(window.project.articles[-1].path.parent)
+    assert window._default_dialog_dir() == expected
+
+
+def test_remember_dialog_dir_overrides_article_fallback(window, tmp_path):
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    window._remember_dialog_dir(other / "book.inkflow.json")
+    assert window._default_dialog_dir() == str(other)
+
+
+def test_remember_dialog_dir_accepts_a_directory_directly(window, tmp_path):
+    folder = tmp_path / "just-a-folder"
+    folder.mkdir()
+    window._remember_dialog_dir(folder)
+    assert window._default_dialog_dir() == str(folder)
+
+
+def test_add_pdfs_dialog_starts_at_existing_article_folder(window, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QFileDialog
+
+    extra = make_pdf(tmp_path / "extra.pdf")
+    seen_dir = {}
+
+    def fake_get_open_file_names(parent, caption, directory, filter):
+        seen_dir["dir"] = directory
+        return ([str(extra)], "")
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", fake_get_open_file_names)
+    window.add_pdfs()
+
+    assert seen_dir["dir"] == str(window.project.articles[0].path.parent)
+    # 選んだファイルのフォルダを覚えている。
+    assert window._last_browsed_dir == extra.parent
+
+
+def test_add_pdfs_dialog_starts_empty_without_articles(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    win = MainWindow(Project())
+    try:
+        seen_dir = {}
+
+        def fake_get_open_file_names(parent, caption, directory, filter):
+            seen_dir["dir"] = directory
+            return ([], "")
+
+        monkeypatch.setattr(QFileDialog, "getOpenFileNames", fake_get_open_file_names)
+        win.add_pdfs()
+        assert seen_dir["dir"] == ""
+    finally:
+        win.preview_cache.close()
+        win.deleteLater()
+
+
+def test_drag_and_drop_articles_also_set_the_fallback_folder(qapp, tmp_path):
+    win = MainWindow(Project())
+    try:
+        folder = tmp_path / "dropped"
+        folder.mkdir()
+        pdf = make_pdf(folder / "article.pdf")
+        win.add_pdf_paths([pdf])
+        assert win._default_dialog_dir() == str(folder)
+    finally:
+        win.preview_cache.close()
+        win.deleteLater()
+
+
+def test_save_project_as_dialog_starts_at_article_folder(window, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    seen = {}
+
+    def fake_get_save_file_name(parent, caption, directory, filter):
+        seen["dir"] = directory
+        return ("", "")  # キャンセル扱い
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_get_save_file_name)
+    window.save_project_as()
+
+    article_dir = str(window.project.articles[-1].path.parent)
+    assert seen["dir"].startswith(article_dir)
+
+
+def test_save_project_as_remembers_chosen_folder(window, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QFileDialog
+
+    chosen = tmp_path / "picked" / "book.inkflow.json"
+    chosen.parent.mkdir()
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", lambda *args: (str(chosen), "")
+    )
+    window.save_project_as()
+    assert window._last_browsed_dir == chosen.parent
+
+
+def test_save_project_as_prefers_existing_project_path(window, monkeypatch, tmp_path):
+    """既に保存済みなら、記事フォルダではなくプロジェクトファイルの場所を提案する。"""
+    from PySide6.QtWidgets import QFileDialog
+
+    window.project.project_path = tmp_path / "saved-elsewhere" / "book.inkflow.json"
+    seen = {}
+
+    def fake_get_save_file_name(parent, caption, directory, filter):
+        seen["dir"] = directory
+        return ("", "")
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_get_save_file_name)
+    window.save_project_as()
+    assert seen["dir"] == str(window.project.project_path)
+
+
+def test_export_epub_dialog_starts_at_article_folder(window, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    seen = {}
+
+    def fake_get_save_file_name(parent, caption, directory, filter):
+        seen["dir"] = directory
+        return ("", "")
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_get_save_file_name)
+    window.export_epub()
+
+    article_dir = str(window.project.articles[-1].path.parent)
+    assert seen["dir"].startswith(article_dir)
+
+
+def test_export_epub_remembers_chosen_folder(window, monkeypatch, tmp_path):
+    """フォルダを覚える処理はワーカー起動より前で同期的に行われる。
+
+    ワーカーの完了を待つと、キューに残ったシグナルが後続の別テストの
+    ``processEvents()`` 呼び出し時に配送されてクラッシュしうる
+    （実際に踏んだ）。ここで確かめたいのはフォルダを覚えたかだけなので、
+    ``BuildWorker.start`` を no-op にしてスレッドそのものを起動しない。
+    """
+    from PySide6.QtWidgets import QFileDialog
+
+    from inkflow.gui.worker import BuildWorker
+
+    chosen = tmp_path / "output" / "book.epub"
+    chosen.parent.mkdir()
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", lambda *args: (str(chosen), "")
+    )
+    monkeypatch.setattr(BuildWorker, "start", lambda self: None)
+
+    window.export_epub()
+    assert window._last_browsed_dir == chosen.parent
+
+
+def test_export_epub_prefers_project_file_location_when_saved(window, monkeypatch, tmp_path):
+    """保存済みプロジェクトでは、従来どおりプロジェクトファイルの場所を優先する。"""
+    from PySide6.QtWidgets import QFileDialog
+
+    window.project.project_path = tmp_path / "saved-elsewhere" / "book.inkflow.json"
+    seen = {}
+
+    def fake_get_save_file_name(parent, caption, directory, filter):
+        seen["dir"] = directory
+        return ("", "")
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_get_save_file_name)
+    window.export_epub()
+    assert seen["dir"].startswith(str(window.project.project_path.parent))
+
+
+def test_new_project_resets_remembered_dialog_dir(window, monkeypatch, tmp_path):
+    window._remember_dialog_dir(tmp_path / "somewhere")
+    monkeypatch.setattr(
+        BookSettingsDialog, "exec", lambda self: BookSettingsDialog.DialogCode.Accepted
+    )
+    window.new_project()
+    assert window._last_browsed_dir is None
+    assert window._default_dialog_dir() == ""
+
+
+def test_open_project_resets_remembered_dialog_dir(window, tmp_path):
+    window._remember_dialog_dir(tmp_path / "somewhere")
+    path = tmp_path / "book.inkflow.json"
+    window._save_to(path)
+
+    loaded = Project.load(path)
+    window.project = loaded
+    window._last_browsed_dir = None  # open_project() が行うのと同じリセット
+    window.refresh_all()
+
+    assert window._default_dialog_dir() == str(window.project.articles[-1].path.parent)
+
+
 # ---- 新規プロジェクト ---------------------------------------------------
 
 

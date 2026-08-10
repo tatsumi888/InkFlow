@@ -96,6 +96,9 @@ class MainWindow(QMainWindow):
         self._dirty = False
         self._worker: BuildWorker | None = None
         self._progress_dialog: QProgressDialog | None = None
+        # ファイル選択ダイアログで最後に実際に使われたフォルダ。
+        # 記事PDF追加・プロジェクト保存・EPUB出力の3つで共有する。
+        self._last_browsed_dir: Path | None = None
 
         self.setWindowTitle(APP_NAME)
         self.resize(1180, 820)
@@ -686,9 +689,30 @@ class MainWindow(QMainWindow):
 
     # ---- 記事の操作 ---------------------------------------------------
 
+    def _default_dialog_dir(self) -> str:
+        """ファイル選択ダイアログの既定フォルダ。
+
+        ユーザーが既にこのプロジェクトでフォルダを選んでいればそこを優先する。
+        まだ無ければ、直近に追加した記事PDFのフォルダを使う（保存・出力を、
+        記事PDFと同じ場所から始められるように）。ドラッグ＆ドロップで追加した
+        記事も対象になる（記事の実パスから求めるため、追加経路を問わない）。
+        """
+        if self._last_browsed_dir is not None:
+            return str(self._last_browsed_dir)
+        if self.project.articles:
+            return str(self.project.articles[-1].path.parent)
+        return ""
+
+    def _remember_dialog_dir(self, chosen_path: str | Path) -> None:
+        path = Path(chosen_path)
+        self._last_browsed_dir = path if path.is_dir() else path.parent
+
     def add_pdfs(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "記事PDFを選ぶ", "", PDF_FILTER)
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "記事PDFを選ぶ", self._default_dialog_dir(), PDF_FILTER
+        )
         if paths:
+            self._remember_dialog_dir(paths[0])
             self.add_pdf_paths([Path(p) for p in paths])
 
     def add_pdf_paths(self, paths: list[Path]) -> None:
@@ -787,6 +811,7 @@ class MainWindow(QMainWindow):
         self.preview_cache.invalidate()
         self.project = project
         self._current = 0
+        self._last_browsed_dir = None
         self._mark_dirty(False)
         self.refresh_all()
         self.statusBar().showMessage("新規プロジェクトを作成しました", 4000)
@@ -808,6 +833,7 @@ class MainWindow(QMainWindow):
         self.project = project
         self.preview_cache.invalidate()
         self._current = 0
+        self._last_browsed_dir = None
         self._mark_dirty(False)
         self.refresh_all()
 
@@ -817,14 +843,18 @@ class MainWindow(QMainWindow):
         return self._save_to(self.project.project_path)
 
     def save_project_as(self) -> bool:
-        suggested = self.project.project_path or Path(
-            f"{self.project.book_title() or 'inkflow'}{PROJECT_SUFFIX}"
-        )
+        if self.project.project_path:
+            suggested = self.project.project_path
+        else:
+            filename = f"{self.project.book_title() or 'inkflow'}{PROJECT_SUFFIX}"
+            default_dir = self._default_dialog_dir()
+            suggested = Path(default_dir) / filename if default_dir else Path(filename)
         path, _ = QFileDialog.getSaveFileName(
             self, "プロジェクトを保存", str(suggested), PROJECT_FILTER
         )
         if not path:
             return False
+        self._remember_dialog_dir(path)
         return self._save_to(Path(path))
 
     def _save_to(self, path: Path) -> bool:
@@ -847,12 +877,19 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             return
 
-        suggested = builder.default_output_path(self.project)
+        if self.project.project_path:
+            suggested = builder.default_output_path(self.project)
+        else:
+            default_dir = self._default_dialog_dir()
+            suggested = builder.default_output_path(
+                self.project, Path(default_dir) if default_dir else None
+            )
         path, _ = QFileDialog.getSaveFileName(
             self, "EPUBの保存先", str(suggested), "EPUB (*.epub)"
         )
         if not path:
             return
+        self._remember_dialog_dir(path)
 
         total = self.project.output_page_count()
         dialog = QProgressDialog("EPUBを生成しています…", "中止", 0, total, self)
