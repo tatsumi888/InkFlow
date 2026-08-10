@@ -23,6 +23,8 @@ from .models import (
 )
 
 ROTATE_CHOICES = {"none": ROTATION_NONE, "cw": ROTATION_CW, "ccw": ROTATION_CCW}
+# 俯瞰は「分割コマと同じ」（= None）も選べる。
+OVERVIEW_ROTATE_CHOICES: dict[str, int | None] = {"same": None, **ROTATE_CHOICES}
 
 PROGRESS_WIDTH = 28
 
@@ -108,8 +110,15 @@ def _add_project_options(parser: argparse.ArgumentParser) -> None:
         "--rotate",
         choices=list(ROTATE_CHOICES),
         default=None,
-        help="出力コマを90°回す（cw=右90°, ccw=左90°）。"
+        help="分割コマを90°回す（cw=右90°, ccw=左90°）。"
         "上下2分割など横長のコマで、端末を横向きに持つと文字が大きくなる",
+    )
+    parser.add_argument(
+        "--rotate-overview",
+        choices=list(OVERVIEW_ROTATE_CHOICES),
+        default=None,
+        help="ページ全体（俯瞰）の向きを分割コマと別に指定する（既定: same=分割と同じ）。"
+        "A4横を左右に割る場合など、俯瞰と分割コマで望ましい向きが逆になるときに使う",
     )
     parser.add_argument(
         "--overlap",
@@ -336,6 +345,8 @@ def _defaults_from_args(args: argparse.Namespace) -> PageDefaults:
         defaults.include_overview = False
     if args.rotate is not None:
         defaults.rotate = ROTATE_CHOICES[args.rotate]
+    if args.rotate_overview is not None:
+        defaults.rotate_overview = OVERVIEW_ROTATE_CHOICES[args.rotate_overview]
     if args.overlap is not None:
         defaults.overlap = layouts.clamp_overlap(args.overlap)
     if args.no_trim:
@@ -365,6 +376,12 @@ def _override_project(project: Project, args: argparse.Namespace) -> None:
         for article in project.articles:
             for page in article.pages:
                 page.rotate = rotation
+    if args.rotate_overview is not None:
+        overview_rotation = OVERVIEW_ROTATE_CHOICES[args.rotate_overview]
+        project.defaults.rotate_overview = overview_rotation
+        for article in project.articles:
+            for page in article.pages:
+                page.rotate_overview = overview_rotation
     if args.overlap is not None:
         project.defaults.overlap = layouts.clamp_overlap(args.overlap)
     if args.no_trim:

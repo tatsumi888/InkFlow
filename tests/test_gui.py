@@ -299,6 +299,124 @@ def test_apply_to_all_spreads_rotation(window):
     )
 
 
+# ---- 俯瞰の縦横入替（分割コマとは別指定） -----------------------------
+
+
+def test_overview_rotation_defaults_to_same(window):
+    from inkflow.gui.main_window import OVERVIEW_ROTATION_CHOICES
+
+    assert window._current_spec().rotate_overview is None
+    same_index = OVERVIEW_ROTATION_CHOICES.index(None)
+    assert window.overview_rotation_buttons[same_index].isChecked() is True
+
+
+def test_set_overview_rotation_is_independent(window):
+    window.set_rotation(90)
+    window.set_overview_rotation(0)
+    spec = window._current_spec()
+    assert spec.rotate == 90
+    assert spec.rotate_overview == 0
+    assert spec.effective_overview_rotation() == 0
+
+
+def test_cycle_overview_rotation_walks_through_all_choices(window):
+    assert window._current_spec().rotate_overview is None
+    window.cycle_overview_rotation()
+    assert window._current_spec().rotate_overview == 0
+    window.cycle_overview_rotation()
+    assert window._current_spec().rotate_overview == 90
+    window.cycle_overview_rotation()
+    assert window._current_spec().rotate_overview == 270
+    window.cycle_overview_rotation()
+    assert window._current_spec().rotate_overview is None
+
+
+def test_overview_rotation_shows_in_tree_only_when_different(window):
+    window.set_rotation(90)
+    # 「＋全体」は俯瞰を出力する印。向きは分割と同じなので出さない。
+    assert "俯瞰" not in window.tree.topLevelItem(0).child(0).text(0)
+    window.set_overview_rotation(0)
+    assert "・俯瞰なし" in window.tree.topLevelItem(0).child(0).text(0)
+
+
+def test_overview_rotation_shows_in_page_label(window):
+    window.set_rotation(90)
+    window.set_overview_rotation(0)
+    assert "分割 右90°" in window.page_label.text()
+    assert "俯瞰 なし" in window.page_label.text()
+
+
+def test_overview_rotation_controls_disabled_without_overview(window):
+    window.toggle_overview()  # 俯瞰を出力しない
+    assert all(
+        not button.isEnabled() for button in window.overview_rotation_buttons.values()
+    )
+    window.toggle_overview()
+    assert all(button.isEnabled() for button in window.overview_rotation_buttons.values())
+
+
+def test_overview_rotation_controls_enabled_for_full_layout(window):
+    window.select_layout(layouts.layout_ids().index("full"))
+    assert all(button.isEnabled() for button in window.overview_rotation_buttons.values())
+
+
+def test_layout_change_keeps_overview_rotation(window):
+    window.set_overview_rotation(270)
+    window.select_layout(layouts.layout_ids().index("third_v"))
+    assert window._current_spec().rotate_overview == 270
+
+
+def test_overview_toggle_keeps_overview_rotation(window):
+    window.set_overview_rotation(90)
+    window.toggle_overview()
+    assert window._current_spec().rotate_overview == 90
+
+
+def test_apply_to_all_spreads_overview_rotation(window):
+    window.set_rotation(90)
+    window.set_overview_rotation(0)
+    window.apply_to_all()
+    assert all(
+        page.rotate == 90 and page.rotate_overview == 0
+        for article in window.project.articles
+        for page in article.pages
+    )
+
+
+def test_apply_same_as_previous_copies_overview_rotation(window):
+    window.set_overview_rotation(270)
+    window.next_page()
+    window.apply_same_as_previous()
+    article_index, page_index = window._flat[1]
+    assert window.project.articles[article_index].pages[page_index].rotate_overview == 270
+
+
+def test_overview_rotation_survives_save_and_load(window, tmp_path):
+    window.set_rotation(90)
+    window.set_overview_rotation(0)
+    path = tmp_path / "ov.inkflow.json"
+    window._save_to(path)
+
+    reloaded = Project.load(path)
+    assert reloaded.articles[0].pages[0].rotate == 90
+    assert reloaded.articles[0].pages[0].rotate_overview == 0
+
+
+def test_set_overview_rotation_ignores_invalid_values(window):
+    window.set_overview_rotation(45)
+    assert window._current_spec().rotate_overview is None
+
+
+def test_overview_rotation_on_empty_project_is_safe(qapp):
+    win = MainWindow(Project())
+    try:
+        win.set_overview_rotation(90)
+        win.cycle_overview_rotation()
+    finally:
+        win.preview_cache.close()
+        win.deleteLater()
+
+
 def test_apply_same_as_previous_copies_rotation(window):
     window.set_rotation(90)
     window.next_page()

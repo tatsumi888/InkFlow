@@ -257,6 +257,113 @@ def test_no_rotation_leaves_existing_output_unchanged(single_page_pdf):
         assert left.image.tobytes() == right.image.tobytes()
 
 
+# ---- 俯瞰と分割コマで別々の向き -----------------------------------------
+
+
+def content_aspect(image) -> float:
+    """描かれている領域（白い余白を除いた部分）の 幅/高さ。
+
+    出力画像はどれも端末解像度ちょうどなので、寸法では向きを判定できない。
+    余白を除いた中身の縦横比を見れば、回っているかどうかが分かる。
+    """
+    gray = image.convert("L")
+    mask = gray.point(lambda value: 255 if value < 250 else 0)
+    left, top, right, bottom = mask.getbbox()
+    return (right - left) / (bottom - top)
+
+
+@pytest.mark.parametrize(
+    ("rotate", "rotate_overview", "overview_landscape", "part_landscape"),
+    [
+        # B5縦を上下2分割: 俯瞰は縦長、コマは横長。回すと向きが入れ替わる。
+        (0, 0, False, True),  # どちらも回さない
+        (0, 90, True, True),  # 俯瞰だけ回す
+        (90, 0, False, False),  # 分割コマだけ回す
+        (90, 90, True, False),  # どちらも回す
+    ],
+)
+def test_overview_and_parts_rotate_independently(
+    single_page_pdf, rotate, rotate_overview, overview_landscape, part_landscape
+):
+    project = make_project([single_page_pdf])
+    project.apply_layout_to_all(
+        PageSpec(
+            "half_v", include_overview=True, rotate=rotate, rotate_overview=rotate_overview
+        )
+    )
+    pages = list(composer.compose(project))
+
+    assert pages[0].is_overview
+    assert (content_aspect(pages[0].image) > 1.0) is overview_landscape
+    assert (content_aspect(pages[1].image) > 1.0) is part_landscape
+
+
+def test_default_overview_rotation_matches_explicit(single_page_pdf):
+    """既定（分割と同じ）は、同じ角度を明示した場合と1バイトも変わらない。"""
+    implicit = make_project([single_page_pdf])
+    implicit.apply_layout_to_all(PageSpec("half_v", rotate=90))
+    explicit = make_project([single_page_pdf])
+    explicit.apply_layout_to_all(PageSpec("half_v", rotate=90, rotate_overview=90))
+
+    for left, right in zip(composer.compose(implicit), composer.compose(explicit)):
+        assert left.image.tobytes() == right.image.tobytes()
+
+
+def test_overview_rotation_does_not_change_page_count(single_page_pdf):
+    project = make_project([single_page_pdf])
+    project.apply_layout_to_all(PageSpec("half_v", rotate=0, rotate_overview=90))
+    assert len(list(composer.compose(project))) == 3
+
+
+def test_differing_rotations_keep_both_outputs_sharp(single_page_pdf):
+    """俯瞰と分割で向きが違っても、どちらも拡大されない解像度でレンダリングされる。
+
+    それぞれ単独で最適化した場合と同等の描画量になることで確かめる。
+    """
+    mixed = make_project([single_page_pdf])
+    mixed.apply_layout_to_all(
+        PageSpec("half_v", include_overview=True, rotate=90, rotate_overview=0)
+    )
+    mixed_pages = list(composer.compose(mixed))
+
+    overview_alone = make_project([single_page_pdf])
+    overview_alone.apply_layout_to_all(PageSpec("full", rotate=0, rotate_overview=0))
+    parts_alone = make_project([single_page_pdf])
+    parts_alone.apply_layout_to_all(
+        PageSpec("half_v", include_overview=False, rotate=90)
+    )
+
+    overview_reference = ink_pixels(next(composer.compose(overview_alone)).image)
+    parts_reference = ink_pixels(next(composer.compose(parts_alone)).image)
+
+    assert ink_pixels(mixed_pages[0].image) >= overview_reference * 0.95
+    assert ink_pixels(mixed_pages[1].image) >= parts_reference * 0.95
+
+
+def test_full_layout_uses_the_overview_rotation(single_page_pdf):
+    """full は俯瞰1枚に畳まれるので、俯瞰側の設定に従う。"""
+    project = make_project([single_page_pdf])
+    project.apply_layout_to_all(PageSpec("full", rotate=0, rotate_overview=90))
+    assert content_aspect(next(composer.compose(project)).image) > 1.0
+
+    upright = make_project([single_page_pdf])
+    upright.apply_layout_to_all(PageSpec("full", rotate=0))
+    assert content_aspect(next(composer.compose(upright)).image) < 1.0
+
+
+def test_overview_rotation_is_ignored_when_overview_is_off(single_page_pdf):
+    """俯瞰を出さない設定なら、俯瞰の向きは出力に影響しない。"""
+    without = make_project([single_page_pdf])
+    without.apply_layout_to_all(
+        PageSpec("half_v", include_overview=False, rotate=0, rotate_overview=90)
+    )
+    plain = make_project([single_page_pdf])
+    plain.apply_layout_to_all(PageSpec("half_v", include_overview=False, rotate=0))
+
+    for left, right in zip(composer.compose(without), composer.compose(plain)):
+        assert left.image.tobytes() == right.image.tobytes()
+
+
 def test_compose_reports_missing_pdf(tmp_path, single_page_pdf):
     project = make_project([single_page_pdf])
     project.articles[0].path = tmp_path / "gone.pdf"

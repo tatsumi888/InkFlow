@@ -118,35 +118,85 @@ def _compose_page(
 
     content_width_in = geometry.width_in * (content_rect[2] - content_rect[0])
     content_height_in = geometry.height_in * (content_rect[3] - content_rect[1])
-    dpi = renderer.required_dpi(
+
+    overview_rotation = spec.effective_overview_rotation()
+    has_overview = layout.id == "full" or spec.include_overview
+
+    dpi = _required_dpi_for_page(
         content_width_in,
         content_height_in,
-        layouts.min_relative_size(spec.layout_id),
+        spec,
+        layout,
         device,
-        rotated=spec.rotate != 0,
+        has_overview=has_overview,
+        overview_rotation=overview_rotation,
     )
 
     page_image = document.render(page_index, dpi)
     content = imaging.crop_relative(page_image, content_rect)
 
-    def to_output(image: Image.Image) -> Image.Image:
+    def to_output(image: Image.Image, rotation: int) -> Image.Image:
         # 回転は finalize_page の**前**に行う。あとから回すと、白パディング込みで
         # 回ってしまい端末解像度に収まらなくなる。
         return imaging.finalize_page(
-            imaging.rotate_image(image, spec.rotate), device.size, options
+            imaging.rotate_image(image, rotation), device.size, options
         )
 
     if layout.id == "full":
-        # 俯瞰と分割が同じ絵になるので1枚に畳む。
-        yield (to_output(content), 0, True)
+        # 俯瞰と分割が同じ絵になるので1枚に畳む。向きは俯瞰側の設定に従う。
+        yield (to_output(content, overview_rotation), 0, True)
         return
 
-    # 俯瞰も同じ向きに回す。1ページ分を読む間に端末を持ち替えずに済ませるため。
     if spec.include_overview:
-        yield (to_output(content), -1, True)
+        yield (to_output(content, overview_rotation), -1, True)
 
     for part_index, rect in enumerate(layouts.reading_rects(spec.layout_id, defaults.overlap)):
-        yield (to_output(imaging.crop_relative(content, rect)), part_index, False)
+        yield (to_output(imaging.crop_relative(content, rect), spec.rotate), part_index, False)
+
+
+def _required_dpi_for_page(
+    content_width_in: float,
+    content_height_in: float,
+    spec: PageSpec,
+    layout: layouts.Layout,
+    device,
+    *,
+    has_overview: bool,
+    overview_rotation: int,
+) -> float:
+    """そのページの出力すべてを拡大せずに賄える解像度を返す。
+
+    俯瞰と分割コマで回転が違うと、必要な解像度も別々になる。1ページにつき
+    レンダリングは1回という原則を保つため、**両方の要求を満たす大きい方**を採る。
+
+    出力しない側は計算に入れない（俯瞰なしの設定で無駄に高い解像度を使わないため）。
+    """
+    requirements: list[float] = []
+
+    if has_overview:
+        # 俯瞰はページ全面なので、最小コマの相対サイズは (1.0, 1.0)。
+        requirements.append(
+            renderer.required_dpi(
+                content_width_in,
+                content_height_in,
+                (1.0, 1.0),
+                device,
+                rotated=overview_rotation != 0,
+            )
+        )
+
+    if layout.id != "full":
+        requirements.append(
+            renderer.required_dpi(
+                content_width_in,
+                content_height_in,
+                layouts.min_relative_size(spec.layout_id),
+                device,
+                rotated=spec.rotate != 0,
+            )
+        )
+
+    return max(requirements)
 
 
 def preview_rects(spec: PageSpec, defaults: PageDefaults) -> tuple[tuple[float, ...], ...]:

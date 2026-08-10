@@ -14,6 +14,7 @@ from inkflow.models import (
     PageDefaults,
     PageSpec,
     Project,
+    normalize_optional_rotation,
     normalize_rotation,
 )
 
@@ -130,6 +131,94 @@ def test_page_defaults_carries_rotation_to_new_pages():
 def test_page_defaults_normalizes_rotation():
     assert PageDefaults.from_dict({"rotate": -90}).rotate == ROTATION_CCW
     assert PageDefaults.from_dict({"rotate": 33}).rotate == ROTATION_NONE
+
+
+# ---- 俯瞰ページの回転（分割コマとは別指定） -----------------------------
+
+
+def test_overview_rotation_defaults_to_following_the_parts():
+    spec = PageSpec("half_v", rotate=ROTATION_CW)
+    assert spec.rotate_overview is None
+    assert spec.effective_overview_rotation() == ROTATION_CW
+
+
+def test_overview_rotation_can_be_independent():
+    spec = PageSpec("half_h", rotate=ROTATION_NONE, rotate_overview=ROTATION_CW)
+    assert spec.effective_overview_rotation() == ROTATION_CW
+    assert spec.rotate == ROTATION_NONE
+
+
+def test_overview_rotation_can_be_explicitly_none():
+    """分割コマは回すが俯瞰は正立、という指定。"""
+    spec = PageSpec("half_v", rotate=ROTATION_CW, rotate_overview=ROTATION_NONE)
+    assert spec.effective_overview_rotation() == ROTATION_NONE
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(None, None), (0, 0), (90, 90), (270, 270), (-90, 270), (180, None), ("cw", None)],
+)
+def test_normalize_optional_rotation(value, expected):
+    assert normalize_optional_rotation(value) == expected
+
+
+def test_overview_rotation_round_trip(tmp_path):
+    project = make_project(tmp_path)
+    project.articles[0].pages[0] = PageSpec("half_h", rotate=0, rotate_overview=ROTATION_CW)
+    project.articles[0].pages[1] = PageSpec("half_v", rotate=ROTATION_CW, rotate_overview=0)
+    project.articles[0].pages[2] = PageSpec("half_v", rotate=ROTATION_CCW)
+
+    path = tmp_path / "ov.inkflow.json"
+    project.save(path)
+    loaded = Project.load(path)
+
+    assert loaded.articles[0].pages[0].rotate_overview == ROTATION_CW
+    assert loaded.articles[0].pages[1].rotate_overview == ROTATION_NONE
+    assert loaded.articles[0].pages[2].rotate_overview is None
+
+
+def test_overview_rotation_missing_key_follows_the_parts():
+    """俯瞰の回転を持たない旧プロジェクトは、これまでどおり分割コマに従う。"""
+    spec = PageSpec.from_dict({"layout": "half_v", "overview": True, "rotate": 90})
+    assert spec.rotate_overview is None
+    assert spec.effective_overview_rotation() == 90
+
+
+def test_overview_rotation_null_is_same_as_missing():
+    spec = PageSpec.from_dict({"layout": "half_v", "rotate": 90, "rotate_overview": None})
+    assert spec.rotate_overview is None
+
+
+def test_overview_rotation_invalid_value_falls_back_to_same():
+    spec = PageSpec.from_dict({"rotate": 90, "rotate_overview": 45})
+    assert spec.rotate_overview is None
+
+
+def test_overview_rotation_label():
+    assert PageSpec().overview_rotation_label() == "分割と同じ"
+    assert PageSpec(rotate_overview=ROTATION_NONE).overview_rotation_label() == "なし"
+    assert PageSpec(rotate_overview=ROTATION_CW).overview_rotation_label() == "右90°"
+    assert PageSpec(rotate_overview=ROTATION_CCW).overview_rotation_label() == "左90°"
+
+
+def test_overview_rotation_does_not_change_page_count():
+    for value in (None, ROTATION_NONE, ROTATION_CW, ROTATION_CCW):
+        assert PageSpec("half_v", rotate_overview=value).output_page_count() == 3
+
+
+def test_page_defaults_carries_overview_rotation():
+    defaults = PageDefaults(rotate=ROTATION_CW, rotate_overview=ROTATION_NONE)
+    spec = defaults.to_page_spec()
+    assert spec.rotate == ROTATION_CW
+    assert spec.rotate_overview == ROTATION_NONE
+
+
+def test_page_defaults_overview_rotation_round_trip(tmp_path):
+    project = make_project(tmp_path)
+    project.defaults = PageDefaults(rotate=ROTATION_CW, rotate_overview=ROTATION_NONE)
+    path = tmp_path / "d.inkflow.json"
+    project.save(path)
+    assert Project.load(path).defaults.rotate_overview == ROTATION_NONE
 
 
 # ---- ImageOptions / PageDefaults --------------------------------------

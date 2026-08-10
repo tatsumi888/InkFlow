@@ -47,6 +47,8 @@ class PageOverlay:
     show_trim: bool = True
     labels: list[str] = field(default_factory=list)
     rotation_label: str = ""
+    # 分割コマと向きが違うときだけ入る。
+    overview_rotation_label: str = ""
 
 
 def pil_to_qimage(image: Image.Image) -> QImage:
@@ -111,10 +113,9 @@ class PageView(QWidget):
         self._paint_parts(painter, content_rect)
         if self._overlay.include_overview:
             self._paint_overview_badge(painter, page_rect)
-        if self._overlay.rotation_label:
-            # プレビュー自体は回さない。回すと分割枠と読み順番号の位置関係が
-            # 直感と合わなくなり、「どこで切れるか」を確かめるという役割を損なう。
-            self._paint_rotation_badge(painter, page_rect, self._overlay.rotation_label)
+        # プレビュー自体は回さない。回すと分割枠と読み順番号の位置関係が
+        # 直感と合わなくなり、「どこで切れるか」を確かめるという役割を損なう。
+        self._paint_rotation_badges(painter, page_rect)
 
     def _paint_hint(self, painter: QPainter) -> None:
         painter.setPen(QPen(HINT_COLOR))
@@ -153,26 +154,38 @@ class PageView(QWidget):
             OVERVIEW_BADGE_BG,
         )
 
-    def _paint_rotation_badge(self, painter: QPainter, page_rect: QRectF, text: str) -> None:
-        """回転が設定されていることを、ページ左上の角丸ラベルで示す。
+    def _paint_rotation_badges(self, painter: QPainter, page_rect: QRectF) -> None:
+        """回転の設定を、ページ左上の角丸ラベルで示す。
 
-        円形バッジ（俯瞰の「全」・読み順の数字）とは形を変えて区別する。
+        円形バッジ（俯瞰の「全」・読み順の数字）とは形を変えて区別する。分割コマと
+        俯瞰で向きが違うときは、どちらがどちらか分かるよう2つ並べる。
         """
+        labels: list[str] = []
+        if self._overlay.rotation_label:
+            prefix = "分割 " if self._overlay.overview_rotation_label else ""
+            labels.append(f"⟲ {prefix}{self._overlay.rotation_label}")
+        if self._overlay.overview_rotation_label:
+            labels.append(f"⟲ 俯瞰 {self._overlay.overview_rotation_label}")
+        if not labels:
+            return
+
         font = QFont(painter.font())
         font.setBold(True)
         font.setPointSizeF(10.0)
         painter.setFont(font)
 
-        label = f"⟲ {text}" if text else ""
-        width = painter.fontMetrics().horizontalAdvance(label) + 18
-        height = painter.fontMetrics().height() + 8
-        box = QRectF(page_rect.x() + 8, page_rect.y() + 8, width, height)
+        top = page_rect.y() + 8
+        for label in labels:
+            width = painter.fontMetrics().horizontalAdvance(label) + 18
+            height = painter.fontMetrics().height() + 8
+            box = QRectF(page_rect.x() + 8, top, width, height)
 
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(ROTATION_BADGE_BG)
-        painter.drawRoundedRect(box, 6, 6)
-        painter.setPen(QPen(BADGE_FG))
-        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, label)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(ROTATION_BADGE_BG)
+            painter.drawRoundedRect(box, 6, 6)
+            painter.setPen(QPen(BADGE_FG))
+            painter.drawText(box, Qt.AlignmentFlag.AlignCenter, label)
+            top += height + 4
 
     def _paint_badge(
         self, painter: QPainter, center: QPointF, text: str, color: QColor

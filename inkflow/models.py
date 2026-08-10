@@ -39,6 +39,11 @@ ROTATION_LABELS = {
 }
 
 
+# 俯瞰ページの回転で「分割コマと同じ」を表す値。
+ROTATION_SAME_AS_PARTS = None
+ROTATION_SAME_LABEL = "分割と同じ"
+
+
 def normalize_rotation(value: Any, fallback: int = ROTATION_NONE) -> int:
     """回転値を正規化する。扱えない値は既定へ落とす（例外にしない）。"""
     try:
@@ -46,6 +51,21 @@ def normalize_rotation(value: Any, fallback: int = ROTATION_NONE) -> int:
     except (TypeError, ValueError):
         return fallback
     return rotation if rotation in ROTATIONS else fallback
+
+
+def normalize_optional_rotation(value: Any) -> int | None:
+    """俯瞰用の回転を正規化する。``None`` は「分割コマと同じ」の意味。
+
+    キーが無い／``null``／扱えない値は、いずれも ``None``（＝分割コマに従う）に
+    落とす。既存プロジェクトを読み込んでも挙動が変わらないようにするため。
+    """
+    if value is None:
+        return None
+    try:
+        rotation = int(value) % 360
+    except (TypeError, ValueError):
+        return None
+    return rotation if rotation in ROTATIONS else None
 
 
 def _as_bool(value: Any, fallback: bool) -> bool:
@@ -77,12 +97,16 @@ class PageSpec:
     layout_id: str = layouts.DEFAULT_LAYOUT_ID
     include_overview: bool = True
     rotate: int = ROTATION_NONE
+    # None は「分割コマと同じ向き」。俯瞰と分割コマで望ましい向きが逆になる誌面
+    # （A4横を左右に割る場合など）があるため、別々に指定できるようにしている。
+    rotate_overview: int | None = ROTATION_SAME_AS_PARTS
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "layout": self.layout_id,
             "overview": self.include_overview,
             "rotate": self.rotate,
+            "rotate_overview": self.rotate_overview,
         }
 
     @classmethod
@@ -97,10 +121,24 @@ class PageSpec:
             layout_id=layout_id,
             include_overview=_as_bool(data.get("overview"), base.include_overview),
             rotate=normalize_rotation(data.get("rotate"), base.rotate),
+            rotate_overview=(
+                normalize_optional_rotation(data["rotate_overview"])
+                if "rotate_overview" in data
+                else base.rotate_overview
+            ),
         )
+
+    def effective_overview_rotation(self) -> int:
+        """俯瞰ページに実際に適用される回転角。"""
+        return self.rotate if self.rotate_overview is None else self.rotate_overview
 
     def rotation_label(self) -> str:
         return ROTATION_LABELS.get(self.rotate, ROTATION_LABELS[ROTATION_NONE])
+
+    def overview_rotation_label(self) -> str:
+        if self.rotate_overview is None:
+            return ROTATION_SAME_LABEL
+        return ROTATION_LABELS.get(self.rotate_overview, ROTATION_LABELS[ROTATION_NONE])
 
     def output_page_count(self) -> int:
         """このページが何枚の出力ページになるか。"""
@@ -118,6 +156,7 @@ class PageDefaults:
     layout_id: str = layouts.DEFAULT_LAYOUT_ID
     include_overview: bool = True
     rotate: int = ROTATION_NONE
+    rotate_overview: int | None = ROTATION_SAME_AS_PARTS
     overlap: float = layouts.DEFAULT_OVERLAP
     auto_trim: bool = True
     trim_threshold: int = 245
@@ -127,6 +166,7 @@ class PageDefaults:
             layout_id=self.layout_id,
             include_overview=self.include_overview,
             rotate=self.rotate,
+            rotate_overview=self.rotate_overview,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -134,6 +174,7 @@ class PageDefaults:
             "layout": self.layout_id,
             "overview": self.include_overview,
             "rotate": self.rotate,
+            "rotate_overview": self.rotate_overview,
             "overlap": self.overlap,
             "auto_trim": self.auto_trim,
             "trim_threshold": self.trim_threshold,
@@ -151,6 +192,7 @@ class PageDefaults:
             layout_id=layout_id,
             include_overview=_as_bool(data.get("overview"), base.include_overview),
             rotate=normalize_rotation(data.get("rotate"), base.rotate),
+            rotate_overview=normalize_optional_rotation(data.get("rotate_overview")),
             overlap=layouts.clamp_overlap(_as_float(data.get("overlap"), base.overlap)),
             auto_trim=_as_bool(data.get("auto_trim"), base.auto_trim),
             trim_threshold=min(

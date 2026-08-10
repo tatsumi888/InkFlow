@@ -41,10 +41,14 @@ from ..models import (
     PROJECT_SUFFIX,
     ROTATION_LABELS,
     ROTATION_NONE,
+    ROTATION_SAME_LABEL,
     ROTATIONS,
     PageSpec,
     Project,
 )
+
+# 俯瞰の向きの選択肢。None は「分割コマと同じ」。
+OVERVIEW_ROTATION_CHOICES: tuple[int | None, ...] = (None, *ROTATIONS)
 from .page_view import PageOverlay, PageView
 from .settings_dialog import BookSettingsDialog
 from .worker import BuildWorker
@@ -73,7 +77,8 @@ SHORTCUT_HELP = """\
 1 〜 7             分割レイアウトを選ぶ
 Enter              前ページと同じ設定にして次へ
 O                  ページ全体（俯瞰）の有無を切り替え
-R                  縦横入替（なし → 右90° → 左90°）
+R                  分割コマの縦横入替（なし → 右90° → 左90°）
+Shift+R            ページ全体（俯瞰）の縦横入替（分割と同じ → なし → 右90° → 左90°）
 Ctrl+O             PDFを追加
 Ctrl+S             プロジェクトを保存
 Ctrl+E             EPUBを出力
@@ -200,7 +205,7 @@ class MainWindow(QMainWindow):
         group_layout.addWidget(self.overview_check)
 
         group_layout.addSpacing(6)
-        group_layout.addWidget(QLabel("縦横入替  [R]"))
+        group_layout.addWidget(QLabel("縦横入替 — 分割コマ  [R]"))
         rotation_row = QWidget()
         rotation_layout = QHBoxLayout(rotation_row)
         rotation_layout.setContentsMargins(0, 0, 0, 0)
@@ -218,6 +223,29 @@ class MainWindow(QMainWindow):
         rotation_layout.addStretch(1)
         self.rotation_group.idToggled.connect(self._on_rotation_selected)
         group_layout.addWidget(rotation_row)
+
+        group_layout.addWidget(QLabel("縦横入替 — ページ全体（俯瞰）  [Shift+R]"))
+        overview_row = QWidget()
+        overview_layout = QHBoxLayout(overview_row)
+        overview_layout.setContentsMargins(0, 0, 0, 0)
+        self.overview_rotation_group = QButtonGroup(self)
+        self.overview_rotation_buttons: dict[int, QRadioButton] = {}
+        for index, rotation in enumerate(OVERVIEW_ROTATION_CHOICES):
+            label = (
+                ROTATION_SAME_LABEL if rotation is None else ROTATION_LABELS[rotation]
+            )
+            button = QRadioButton(label)
+            button.setToolTip(
+                "俯瞰と分割コマで望ましい向きが逆になる誌面がある"
+                "（A4横を左右に割ると、俯瞰は回した方が大きく、コマは回さない方が大きい）。"
+            )
+            # QButtonGroup の id は int しか使えないので、選択肢の並び順を id にする。
+            self.overview_rotation_group.addButton(button, index)
+            self.overview_rotation_buttons[index] = button
+            overview_layout.addWidget(button)
+        overview_layout.addStretch(1)
+        self.overview_rotation_group.idToggled.connect(self._on_overview_rotation_selected)
+        group_layout.addWidget(overview_row)
         layout.addWidget(group)
 
         apply_group = QGroupBox("まとめて適用")
@@ -285,6 +313,7 @@ class MainWindow(QMainWindow):
             ("Backspace", self.previous_page),
             ("O", self.toggle_overview),
             ("R", self.cycle_rotation),
+            ("Shift+R", self.cycle_overview_rotation),
             ("Enter", self.apply_same_as_previous),
         ):
             action = QAction(self)
@@ -340,6 +369,10 @@ class MainWindow(QMainWindow):
         layout_def = layouts.get_layout(spec.layout_id)
         overview = "＋全体" if spec.include_overview and layout_def.id != "full" else ""
         rotation = f"・{spec.rotation_label()}" if spec.rotate != ROTATION_NONE else ""
+        # 俯瞰の向きは、分割コマと違うときだけ出す（行が長くなりすぎないように）。
+        # 「＋全体」は俯瞰を出す印なので、向きの方は「俯瞰」と書いて区別する。
+        if spec.rotate_overview is not None and spec.rotate_overview != spec.rotate:
+            rotation += f"・俯瞰{spec.overview_rotation_label()}"
         return (
             f"　{page_index + 1}ページ目 — {layout_def.label.split('（')[0]}{overview}"
             f"{rotation}（{spec.output_page_count()}枚）"
@@ -404,9 +437,16 @@ class MainWindow(QMainWindow):
         article = self.project.articles[article_index]
         spec = article.pages[page_index]
 
-        rotation_note = (
-            f"　縦横入替: {spec.rotation_label()}" if spec.rotate != ROTATION_NONE else ""
-        )
+        overview_rotation = spec.effective_overview_rotation()
+        rotation_note = ""
+        if spec.rotate != ROTATION_NONE or overview_rotation != ROTATION_NONE:
+            if overview_rotation == spec.rotate:
+                rotation_note = f"　縦横入替: {spec.rotation_label()}"
+            else:
+                rotation_note = (
+                    f"　縦横入替: 分割 {spec.rotation_label()} / "
+                    f"俯瞰 {ROTATION_LABELS[overview_rotation]}"
+                )
         self.page_label.setText(
             f"<b>{article.title}</b>　"
             f"（記事 {article_index + 1}/{len(self.project.articles)}・"
@@ -436,6 +476,12 @@ class MainWindow(QMainWindow):
                 rotation_label=(
                     spec.rotation_label() if spec.rotate != ROTATION_NONE else ""
                 ),
+                overview_rotation_label=(
+                    ROTATION_LABELS[overview_rotation]
+                    if (spec.include_overview or is_full)
+                    and overview_rotation != spec.rotate
+                    else ""
+                ),
             ),
         )
 
@@ -445,6 +491,8 @@ class MainWindow(QMainWindow):
         for button in self.layout_buttons:
             button.setEnabled(enabled)
         for button in self.rotation_buttons.values():
+            button.setEnabled(enabled)
+        for button in self.overview_rotation_buttons.values():
             button.setEnabled(enabled)
         self.overview_check.setEnabled(enabled)
         if spec is None:
@@ -463,6 +511,19 @@ class MainWindow(QMainWindow):
         self.rotation_group.blockSignals(True)
         self.rotation_buttons[spec.rotate].setChecked(True)
         self.rotation_group.blockSignals(False)
+
+        # 俯瞰を出力しないページでは、俯瞰の向きは効かないので触れないようにする。
+        shows_overview = spec.include_overview or spec.layout_id == "full"
+        overview_index = (
+            OVERVIEW_ROTATION_CHOICES.index(spec.rotate_overview)
+            if spec.rotate_overview in OVERVIEW_ROTATION_CHOICES
+            else 0
+        )
+        self.overview_rotation_group.blockSignals(True)
+        self.overview_rotation_buttons[overview_index].setChecked(True)
+        self.overview_rotation_group.blockSignals(False)
+        for button in self.overview_rotation_buttons.values():
+            button.setEnabled(shows_overview)
 
     def _update_summary(self) -> None:
         source_pages = sum(len(a.pages) for a in self.project.articles)
@@ -527,6 +588,31 @@ class MainWindow(QMainWindow):
         position = ROTATIONS.index(spec.rotate) if spec.rotate in ROTATIONS else 0
         self.set_rotation(ROTATIONS[(position + 1) % len(ROTATIONS)])
 
+    def set_overview_rotation(self, rotation: int | None) -> None:
+        spec = self._current_spec()
+        if spec is None or rotation not in OVERVIEW_ROTATION_CHOICES:
+            return
+        if spec.rotate_overview == rotation and (
+            spec.rotate_overview is not None or rotation is None
+        ):
+            return
+        self._set_current_spec(replace(spec, rotate_overview=rotation))
+
+    def cycle_overview_rotation(self) -> None:
+        """分割と同じ → なし → 右90° → 左90° → 分割と同じ と巡回する。"""
+        spec = self._current_spec()
+        if spec is None:
+            return
+        current = spec.rotate_overview
+        position = (
+            OVERVIEW_ROTATION_CHOICES.index(current)
+            if current in OVERVIEW_ROTATION_CHOICES
+            else 0
+        )
+        self.set_overview_rotation(
+            OVERVIEW_ROTATION_CHOICES[(position + 1) % len(OVERVIEW_ROTATION_CHOICES)]
+        )
+
     def apply_same_as_previous(self) -> None:
         """ひとつ前のページの設定を複製して、次のページへ進む。"""
         if not self._flat:
@@ -565,6 +651,10 @@ class MainWindow(QMainWindow):
     def _on_rotation_selected(self, rotation: int, checked: bool) -> None:
         if checked:
             self.set_rotation(rotation)
+
+    def _on_overview_rotation_selected(self, index: int, checked: bool) -> None:
+        if checked and 0 <= index < len(OVERVIEW_ROTATION_CHOICES):
+            self.set_overview_rotation(OVERVIEW_ROTATION_CHOICES[index])
 
     def _on_overview_toggled(self, checked: bool) -> None:
         spec = self._current_spec()

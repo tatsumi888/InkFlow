@@ -141,6 +141,59 @@ def test_build_without_rotate_option_keeps_project_value(tmp_path, folder_with_p
         assert a.read("OEBPS/images/p0000.png") == b.read("OEBPS/images/p0000.png")
 
 
+def test_rotate_overview_is_stored_in_project(tmp_path, folder_with_pdfs):
+    output = tmp_path / "ov.inkflow.json"
+    assert cli.main(
+        ["init", str(folder_with_pdfs), "-o", str(output),
+         "--rotate", "cw", "--rotate-overview", "none"]
+    ) == 0
+
+    project = Project.load(output)
+    assert project.defaults.rotate == 90
+    assert project.defaults.rotate_overview == 0
+    assert all(page.rotate_overview == 0 for a in project.articles for page in a.pages)
+
+
+def test_rotate_overview_same_keeps_none(tmp_path, folder_with_pdfs):
+    output = tmp_path / "same.inkflow.json"
+    cli.main(
+        ["init", str(folder_with_pdfs), "-o", str(output),
+         "--rotate", "cw", "--rotate-overview", "same"]
+    )
+    assert Project.load(output).defaults.rotate_overview is None
+
+
+def test_rotate_overview_changes_only_the_overview_page(tmp_path, folder_with_pdfs):
+    plain = tmp_path / "plain.epub"
+    overview_rotated = tmp_path / "ov.epub"
+    common = ["--layout", "half_v", "--device", TEST_DEVICE, "--quiet"]
+    cli.main(["build", str(folder_with_pdfs), "-o", str(plain), *common])
+    cli.main(
+        ["build", str(folder_with_pdfs), "-o", str(overview_rotated),
+         "--rotate-overview", "cw", *common]
+    )
+
+    with zipfile.ZipFile(plain) as a, zipfile.ZipFile(overview_rotated) as b:
+        # p0000 は俯瞰、p0001 は最初の分割コマ
+        assert a.read("OEBPS/images/p0000.png") != b.read("OEBPS/images/p0000.png")
+
+
+def test_rotate_overview_overrides_project_file(tmp_path, folder_with_pdfs):
+    project_path = tmp_path / "book.inkflow.json"
+    cli.main(["init", str(folder_with_pdfs), "-o", str(project_path), "--device", TEST_DEVICE])
+    assert Project.load(project_path).defaults.rotate_overview is None
+
+    plain = tmp_path / "a.epub"
+    overridden = tmp_path / "b.epub"
+    cli.main(["build", str(project_path), "-o", str(plain), "--quiet"])
+    cli.main(
+        ["build", str(project_path), "-o", str(overridden),
+         "--rotate-overview", "cw", "--quiet"]
+    )
+    with zipfile.ZipFile(plain) as a, zipfile.ZipFile(overridden) as b:
+        assert a.read("OEBPS/images/p0000.png") != b.read("OEBPS/images/p0000.png")
+
+
 def test_build_gray_levels_reduces_size(tmp_path, folder_with_pdfs):
     """階調数を落とすとファイルが小さくなる（メール添付の上限対策）。"""
     default_path = tmp_path / "gray16.epub"
