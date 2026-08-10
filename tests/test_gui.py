@@ -614,6 +614,153 @@ def test_empty_window_shows_hint(qapp):
         win.deleteLater()
 
 
+# ---- 新規プロジェクト ---------------------------------------------------
+
+
+def test_new_project_menu_action_has_ctrl_n_shortcut(window):
+    from PySide6.QtGui import QKeySequence
+
+    # 中間結果を変数に残さず1行で連鎖すると、途中のQActionラッパーがすぐ回収され、
+    # shiboken が menu() の戻り値を巻き込んで解放してしまうことがある。
+    # 名前を付けて生きたままにしておくと安定する。
+    menu_bar = window.menuBar()
+    top_actions = menu_bar.actions()
+    file_action = top_actions[0]
+    file_menu = file_action.menu()
+    file_menu_actions = file_menu.actions()
+    action = next(a for a in file_menu_actions if "新規プロジェクト" in a.text())
+    assert action.shortcut() == QKeySequence(QKeySequence.StandardKey.New)
+
+
+def test_new_project_applies_dialog_settings(window, monkeypatch):
+    def fake_exec(self):
+        self.title_edit.setText("新しい雑誌")
+        self.issue_edit.setText("2026年9月号")
+        return BookSettingsDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(BookSettingsDialog, "exec", fake_exec)
+    window.new_project()
+
+    assert window.project.title == "新しい雑誌"
+    assert window.project.issue == "2026年9月号"
+    assert window.project.articles == []
+
+
+def test_new_project_resets_navigation_and_dirty_state(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window.next_page()
+    window.select_layout(layouts.layout_ids().index("half_v"))  # ダーティにしておく
+    monkeypatch.setattr(
+        BookSettingsDialog, "exec", lambda self: BookSettingsDialog.DialogCode.Accepted
+    )
+    monkeypatch.setattr(
+        "inkflow.gui.main_window.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Discard,
+    )
+    window.new_project()
+
+    assert window._current == 0
+    assert window._flat == []
+    assert window.position_label.text() == "0 / 0"
+    assert window._dirty is False
+
+
+def test_new_project_clears_project_path(window, tmp_path, monkeypatch):
+    window._save_to(tmp_path / "old.inkflow.json")
+    assert window.project.project_path is not None
+
+    monkeypatch.setattr(
+        BookSettingsDialog, "exec", lambda self: BookSettingsDialog.DialogCode.Accepted
+    )
+    window.new_project()
+    assert window.project.project_path is None
+
+
+def test_new_project_dialog_cancel_keeps_current_project(window, monkeypatch):
+    original_title = window.project.title
+    original_article_count = len(window.project.articles)
+    monkeypatch.setattr(
+        BookSettingsDialog, "exec", lambda self: BookSettingsDialog.DialogCode.Rejected
+    )
+    window.new_project()
+
+    assert window.project.title == original_title
+    assert len(window.project.articles) == original_article_count
+
+
+def test_new_project_respects_unsaved_changes_guard(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window.select_layout(layouts.layout_ids().index("half_v"))
+    assert window._dirty is True
+
+    monkeypatch.setattr(
+        "inkflow.gui.main_window.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Cancel,
+    )
+    dialog_shown = []
+    monkeypatch.setattr(
+        BookSettingsDialog,
+        "exec",
+        lambda self: dialog_shown.append(True) or BookSettingsDialog.DialogCode.Accepted,
+    )
+    window.new_project()
+
+    assert dialog_shown == []  # 設定ダイアログまで到達しない
+    assert len(window.project.articles) == 3  # 元のプロジェクトのまま
+
+
+def test_new_project_can_discard_unsaved_changes(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window.select_layout(layouts.layout_ids().index("half_v"))
+    monkeypatch.setattr(
+        "inkflow.gui.main_window.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Discard,
+    )
+    monkeypatch.setattr(
+        BookSettingsDialog, "exec", lambda self: BookSettingsDialog.DialogCode.Accepted
+    )
+    window.new_project()
+
+    assert window.project.articles == []
+
+
+def test_new_project_can_save_before_discarding(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    window.select_layout(layouts.layout_ids().index("half_v"))
+    save_path = tmp_path / "saved-before-new.inkflow.json"
+    monkeypatch.setattr(
+        "inkflow.gui.main_window.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Save,
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", lambda *args, **kwargs: (str(save_path), "")
+    )
+    monkeypatch.setattr(
+        BookSettingsDialog, "exec", lambda self: BookSettingsDialog.DialogCode.Accepted
+    )
+    window.new_project()
+
+    assert save_path.is_file()
+    assert window.project.articles == []
+
+
+def test_new_project_from_empty_window_is_safe(qapp, monkeypatch):
+    win = MainWindow(Project())
+    try:
+        monkeypatch.setattr(
+            BookSettingsDialog, "exec", lambda self: BookSettingsDialog.DialogCode.Accepted
+        )
+        win.new_project()
+        assert win.project.articles == []
+    finally:
+        win.preview_cache.close()
+        win.deleteLater()
+
+
 # ---- 設定ダイアログ ---------------------------------------------------
 
 

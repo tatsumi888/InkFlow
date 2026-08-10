@@ -106,6 +106,20 @@ EPUB の要件。`epub_writer.write_epub()` の最初の `writestr` を動かさ
 - **`packaging/` に `__init__.py` を置かない。** PyPI の `packaging`（PyInstaller の依存）と衝突する。
 - **spec の除外リストは必ず実起動で検証する。** 未使用 Qt DLL を落としてサイズを 170MB → 124MB にしているが、落としすぎは起動するまで分からない。`build.py` の動作確認が `selftest` を走らせるのはこのため。
 
+### 6-3. Qt オブジェクトはチェーン呼び出しで取得しない
+
+`window.menuBar().actions()[0].menu()` のように1行で連鎖して書くと、中間の無名オブジェクト（`.actions()` が返す一時リストなど）が式の評価直後にGCされ、shiboken の所有権判定を巻き込んで**本来は生きているはずのオブジェクトまで解放される**ことがある（`RuntimeError: libshiboken: Internal C++ object ... already deleted`）。offscreen・実プラットフォームの両方で再現する。テストでメニューやアクションを辿るときは、必ず中間結果を名前付き変数に分ける。
+
+```python
+# 落ちることがある
+action = window.menuBar().actions()[0].menu().actions()[0]
+
+# 安定する
+menu_bar = window.menuBar()
+file_menu = menu_bar.actions()[0].menu()
+action = file_menu.actions()[0]
+```
+
 ### 7. GUI に入力ウィジェットを置かない
 
 数字キー（`1`〜`7`）をレイアウト選択のショートカットに割り当てているため、メインウィンドウに `QLineEdit` を置くと入力を奪われる。テキスト入力は必ずモーダルダイアログ（`BookSettingsDialog` / `QInputDialog`）側に置く。
@@ -121,4 +135,4 @@ EPUB の要件。`epub_writer.write_epub()` の最初の `writestr` を動かさ
 
 - 作業単位のステアリングは `.steering/[YYYYMMDD]-[NN]-[機能名]/`。`tasklist.md` が進捗の正で、`[ ]` → `[x]` は1タスクずつ即時更新する。
 - ユーザーへの応答・ドキュメントはすべて日本語で書く。
-- **このディレクトリはGitリポジトリではない**。バージョン管理を前提とした操作をしないこと。
+- **このディレクトリはGitリポジトリであり、リモート（`origin` = `github.com/tatsumi888/InkFlow`）を持つ**。`main` ブランチで作業する。push はユーザーの指示があってから行う。

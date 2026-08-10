@@ -79,6 +79,7 @@ Enter              前ページと同じ設定にして次へ
 O                  ページ全体（俯瞰）の有無を切り替え
 R                  分割コマの縦横入替（なし → 右90° → 左90°）
 Shift+R            ページ全体（俯瞰）の縦横入替（分割と同じ → なし → 右90° → 左90°）
+Ctrl+N             新規プロジェクト
 Ctrl+O             PDFを追加
 Ctrl+S             プロジェクトを保存
 Ctrl+E             EPUBを出力
@@ -276,6 +277,8 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("ファイル(&F)")
+        self._add_action(file_menu, "新規プロジェクト…", self.new_project, QKeySequence.StandardKey.New)
+        file_menu.addSeparator()
         self._add_action(file_menu, "PDFを追加…", self.add_pdfs, QKeySequence.StandardKey.Open)
         file_menu.addSeparator()
         self._add_action(file_menu, "プロジェクトを開く…", self.open_project, "Ctrl+Shift+O")
@@ -762,6 +765,30 @@ class MainWindow(QMainWindow):
         self.preview_cache.invalidate()
         self._update_preview()
         self._update_summary()
+
+    def new_project(self) -> None:
+        """作業中のプロジェクトを、次の号のために白紙へ作り直す。
+
+        「本の設定」ダイアログをそのまま流用する。専用ダイアログを別に作らないのは、
+        雑誌名・号・端末の入力欄が既にそこに揃っているため。ダイアログをキャンセル
+        したときに現在のプロジェクトを壊さないよう、``self.project`` を差し替える
+        のは Accepted を確認した後にする。
+        """
+        if not self._confirm_discard_changes():
+            return
+
+        project = Project()
+        dialog = BookSettingsDialog(project, self)
+        if dialog.exec() != BookSettingsDialog.DialogCode.Accepted:
+            return
+        dialog.apply_to(project)
+
+        self.preview_cache.invalidate()
+        self.project = project
+        self._current = 0
+        self._mark_dirty(False)
+        self.refresh_all()
+        self.statusBar().showMessage("新規プロジェクトを作成しました", 4000)
 
     def open_project(self) -> None:
         if not self._confirm_discard_changes():
