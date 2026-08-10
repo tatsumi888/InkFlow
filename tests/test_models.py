@@ -6,6 +6,7 @@ import pytest
 from inkflow import layouts
 from inkflow.errors import ProjectFormatError
 from inkflow.models import (
+    MAX_DIVIDER_BIAS,
     ROTATION_CCW,
     ROTATION_CW,
     ROTATION_NONE,
@@ -14,6 +15,7 @@ from inkflow.models import (
     PageDefaults,
     PageSpec,
     Project,
+    normalize_optional_bias,
     normalize_optional_rotation,
     normalize_rotation,
 )
@@ -219,6 +221,74 @@ def test_page_defaults_overview_rotation_round_trip(tmp_path):
     path = tmp_path / "d.inkflow.json"
     project.save(path)
     assert Project.load(path).defaults.rotate_overview == ROTATION_NONE
+
+
+# ---- 分割線の手動微調整（ノド位置） ---------------------------------------
+
+
+def test_page_spec_bias_defaults_to_automatic():
+    spec = PageSpec()
+    assert spec.column_bias is None
+    assert spec.row_bias is None
+
+
+def test_page_spec_bias_does_not_change_output_page_count():
+    for column_bias in (None, 0.0, 0.1, -0.1):
+        assert PageSpec("half_v", column_bias=column_bias).output_page_count() == 3
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, None),
+        (0.05, pytest.approx(0.05)),
+        (-0.05, pytest.approx(-0.05)),
+        (10.0, MAX_DIVIDER_BIAS),
+        (-10.0, -MAX_DIVIDER_BIAS),
+        ("0.1", pytest.approx(0.1)),
+        ("bogus", None),
+    ],
+)
+def test_normalize_optional_bias(value, expected):
+    assert normalize_optional_bias(value) == expected
+
+
+def test_page_spec_from_dict_normalizes_bias():
+    spec = PageSpec.from_dict({"column_bias": 0.5, "row_bias": "oops"})
+    assert spec.column_bias == MAX_DIVIDER_BIAS
+    assert spec.row_bias is None
+
+
+def test_page_spec_without_bias_keys_reads_as_automatic():
+    """微調整の値を持たない旧プロジェクトは、自動検出のまま扱う。"""
+    spec = PageSpec.from_dict({"layout": "quad_2col"})
+    assert spec.column_bias is None
+    assert spec.row_bias is None
+
+
+def test_page_spec_bias_round_trip(tmp_path):
+    project = make_project(tmp_path)
+    project.articles[0].pages[0] = PageSpec("quad_2col", column_bias=0.04, row_bias=-0.03)
+    path = tmp_path / "bias.inkflow.json"
+    project.save(path)
+    loaded = Project.load(path)
+    assert loaded.articles[0].pages[0].column_bias == pytest.approx(0.04)
+    assert loaded.articles[0].pages[0].row_bias == pytest.approx(-0.03)
+
+
+def test_page_defaults_carries_bias_to_new_pages():
+    defaults = PageDefaults(column_bias=0.06, row_bias=0.02)
+    spec = defaults.to_page_spec()
+    assert spec.column_bias == pytest.approx(0.06)
+    assert spec.row_bias == pytest.approx(0.02)
+
+
+def test_page_defaults_bias_round_trip(tmp_path):
+    project = make_project(tmp_path)
+    project.defaults = PageDefaults(column_bias=0.07)
+    path = tmp_path / "d2.inkflow.json"
+    project.save(path)
+    assert Project.load(path).defaults.column_bias == pytest.approx(0.07)
 
 
 # ---- ImageOptions / PageDefaults --------------------------------------

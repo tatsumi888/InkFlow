@@ -64,6 +64,96 @@ def test_find_content_bbox_handles_all_black():
     assert imaging.find_content_bbox(black) == (0.0, 0.0, 1.0, 1.0)
 
 
+# ---- 分割線の自動検出（ノド検出） ---------------------------------------
+
+
+def two_columns(size=(400, 400), gap=(180, 220)) -> Image.Image:
+    """左右2段の疑似ページ。gapで指定した範囲だけが白い（ノド）。"""
+    image = Image.new("L", size, 255)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, gap[0] - 1, size[1] - 1), fill=0)
+    draw.rectangle((gap[1], 0, size[0] - 1, size[1] - 1), fill=0)
+    return image
+
+
+def two_rows(size=(400, 400), gap=(180, 220)) -> Image.Image:
+    image = Image.new("L", size, 255)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, size[0] - 1, gap[0] - 1), fill=0)
+    draw.rectangle((0, gap[1], size[0] - 1, size[1] - 1), fill=0)
+    return image
+
+
+def test_find_divider_offset_detects_centered_gap():
+    image = two_columns(gap=(180, 220))  # 中心 0.5
+    offset = imaging.find_divider_offset(image, "x", nominal=0.5)
+    assert offset == pytest.approx(0.0, abs=0.01)
+
+
+def test_find_divider_offset_detects_off_center_gap():
+    """既定位置(50%)からズレたノドでも、探索窓内なら見つけて正しいオフセットを返す。"""
+    image = two_columns(gap=(140, 180))  # 中心 0.4
+    offset = imaging.find_divider_offset(image, "x", nominal=0.5)
+    assert offset is not None
+    assert 0.5 + offset == pytest.approx(0.4, abs=0.02)
+
+
+def test_find_divider_offset_detects_y_axis():
+    image = two_rows(gap=(150, 190))  # 中心 0.425
+    offset = imaging.find_divider_offset(image, "y", nominal=0.5)
+    assert offset is not None
+    assert 0.5 + offset == pytest.approx(0.425, abs=0.02)
+
+
+def test_find_divider_offset_ignores_gap_outside_search_window():
+    """探索窓の外にある余白は「無関係な余白」として無視する。"""
+    image = two_columns(gap=(20, 60))  # 中心 0.1（既定探索窓 0.38〜0.62 の外）
+    offset = imaging.find_divider_offset(image, "x", nominal=0.5, search_ratio=0.12)
+    assert offset is None
+
+
+def test_find_divider_offset_none_when_fully_inked():
+    """探索窓内が余白なしなら None（既定位置のまま使うようフォールバック）。"""
+    solid = Image.new("L", (400, 400), 0)
+    assert imaging.find_divider_offset(solid, "x", nominal=0.5) is None
+
+
+def test_find_divider_offset_neutral_when_fully_blank():
+    """探索窓内が全て余白なら、既定位置そのもの（オフセット0）を返す。"""
+    blank = Image.new("L", (400, 400), 255)
+    offset = imaging.find_divider_offset(blank, "x", nominal=0.5)
+    assert offset == pytest.approx(0.0, abs=1e-6)
+
+
+def test_find_divider_offset_none_for_band_narrower_than_minimum():
+    image = two_columns(gap=(199, 201))  # 探索窓内だが幅0.5%（既定の最小1%未満）
+    offset = imaging.find_divider_offset(image, "x", nominal=0.5, min_band_ratio=0.01)
+    assert offset is None
+
+
+def test_find_divider_offset_widening_min_band_ratio_rejects_more():
+    image = two_columns(gap=(170, 230))  # 幅15%
+    assert imaging.find_divider_offset(image, "x", nominal=0.5, min_band_ratio=0.05) is not None
+    assert imaging.find_divider_offset(image, "x", nominal=0.5, min_band_ratio=0.20) is None
+
+
+def test_find_divider_offset_whiteness_threshold_controls_sensitivity():
+    image = two_columns(gap=(180, 220))
+    # ノド部分をわずかに灰色にする。
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((180, 0, 219, 399), fill=248)
+    assert imaging.find_divider_offset(image, "x", nominal=0.5, whiteness_threshold=250) is None
+    assert imaging.find_divider_offset(image, "x", nominal=0.5, whiteness_threshold=240) is not None
+
+
+def test_find_divider_offset_search_ratio_widens_the_window():
+    image = two_columns(gap=(20, 60))  # 中心 0.1
+    assert imaging.find_divider_offset(image, "x", nominal=0.5, search_ratio=0.12) is None
+    found = imaging.find_divider_offset(image, "x", nominal=0.5, search_ratio=0.45)
+    assert found is not None
+    assert 0.5 + found == pytest.approx(0.1, abs=0.02)
+
+
 # ---- クロップ・リサイズ -------------------------------------------------
 
 

@@ -53,6 +53,23 @@ def normalize_rotation(value: Any, fallback: int = ROTATION_NONE) -> int:
     return rotation if rotation in ROTATIONS else fallback
 
 
+# 分割線の手動微調整（ノド位置のオフセット）の許容範囲。
+# imaging.DEFAULT_DIVIDER_SEARCH_RATIO（自動検出の探索窓）より広く取り、
+# 自動検出が届かない位置まで手動なら動かせるようにしている。
+MAX_DIVIDER_BIAS = 0.2
+
+
+def normalize_optional_bias(value: Any, max_bias: float = MAX_DIVIDER_BIAS) -> float | None:
+    """分割線の手動オフセットを正規化する。``None`` は「自動検出に任せる」を意味する。"""
+    if value is None:
+        return None
+    try:
+        bias = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(-max_bias, min(max_bias, bias))
+
+
 def normalize_optional_rotation(value: Any) -> int | None:
     """俯瞰用の回転を正規化する。``None`` は「分割コマと同じ」の意味。
 
@@ -100,6 +117,10 @@ class PageSpec:
     # None は「分割コマと同じ向き」。俯瞰と分割コマで望ましい向きが逆になる誌面
     # （A4横を左右に割る場合など）があるため、別々に指定できるようにしている。
     rotate_overview: int | None = ROTATION_SAME_AS_PARTS
+    # 分割線（ノド）の手動オフセット。None なら自動検出に任せる。
+    # 値があれば、その軸の全ての分割線に一律適用し、自動検出は行わない。
+    column_bias: float | None = None
+    row_bias: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +128,8 @@ class PageSpec:
             "overview": self.include_overview,
             "rotate": self.rotate,
             "rotate_overview": self.rotate_overview,
+            "column_bias": self.column_bias,
+            "row_bias": self.row_bias,
         }
 
     @classmethod
@@ -125,6 +148,16 @@ class PageSpec:
                 normalize_optional_rotation(data["rotate_overview"])
                 if "rotate_overview" in data
                 else base.rotate_overview
+            ),
+            column_bias=(
+                normalize_optional_bias(data["column_bias"])
+                if "column_bias" in data
+                else base.column_bias
+            ),
+            row_bias=(
+                normalize_optional_bias(data["row_bias"])
+                if "row_bias" in data
+                else base.row_bias
             ),
         )
 
@@ -157,6 +190,8 @@ class PageDefaults:
     include_overview: bool = True
     rotate: int = ROTATION_NONE
     rotate_overview: int | None = ROTATION_SAME_AS_PARTS
+    column_bias: float | None = None
+    row_bias: float | None = None
     overlap: float = layouts.DEFAULT_OVERLAP
     auto_trim: bool = True
     trim_threshold: int = 245
@@ -167,6 +202,8 @@ class PageDefaults:
             include_overview=self.include_overview,
             rotate=self.rotate,
             rotate_overview=self.rotate_overview,
+            column_bias=self.column_bias,
+            row_bias=self.row_bias,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -175,6 +212,8 @@ class PageDefaults:
             "overview": self.include_overview,
             "rotate": self.rotate,
             "rotate_overview": self.rotate_overview,
+            "column_bias": self.column_bias,
+            "row_bias": self.row_bias,
             "overlap": self.overlap,
             "auto_trim": self.auto_trim,
             "trim_threshold": self.trim_threshold,
@@ -193,6 +232,8 @@ class PageDefaults:
             include_overview=_as_bool(data.get("overview"), base.include_overview),
             rotate=normalize_rotation(data.get("rotate"), base.rotate),
             rotate_overview=normalize_optional_rotation(data.get("rotate_overview")),
+            column_bias=normalize_optional_bias(data.get("column_bias")),
+            row_bias=normalize_optional_bias(data.get("row_bias")),
             overlap=layouts.clamp_overlap(_as_float(data.get("overlap"), base.overlap)),
             auto_trim=_as_bool(data.get("auto_trim"), base.auto_trim),
             trim_threshold=min(

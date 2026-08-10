@@ -70,6 +70,39 @@ def make_pdf(
     return path
 
 
+def make_asymmetric_pdf(
+    path: Path,
+    gutter_center_ratio: float = 0.35,
+    page_count: int = 1,
+    width_pt: float = B5_WIDTH_PT,
+    height_pt: float = B5_HEIGHT_PT,
+    margin_pt: float = 50.0,
+) -> Path:
+    """左右の段幅が非対称な2段組PDF。ノドの中心が ``gutter_center_ratio`` の位置にある。
+
+    ``quad_2col`` の固定50%分割がノドからズレて本文を切ってしまう状況
+    （実サンプルで実際に踏んだ不具合）を再現するために使う。
+    """
+    doc = pymupdf.open()
+    gutter_half_pt = 8.0
+    usable_left = margin_pt
+    usable_right = width_pt - margin_pt
+    gutter_center_pt = usable_left + (usable_right - usable_left) * gutter_center_ratio
+    for page_index in range(page_count):
+        page = doc.new_page(width=width_pt, height=height_pt)
+        left_rect = pymupdf.Rect(
+            usable_left, margin_pt, gutter_center_pt - gutter_half_pt, height_pt - margin_pt
+        )
+        right_rect = pymupdf.Rect(
+            gutter_center_pt + gutter_half_pt, margin_pt, usable_right, height_pt - margin_pt
+        )
+        _fill_column(left_rect, page, page_index, 0)
+        _fill_column(right_rect, page, page_index, 1)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
 @pytest.fixture
 def sample_pdf(tmp_path: Path) -> Path:
     """2ページ・2段組の合成PDF。"""

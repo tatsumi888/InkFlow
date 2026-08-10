@@ -34,6 +34,14 @@ TRIM_MARGIN_RATIO = 0.006
 # トリム結果がこれより小さければ誤検出とみなし、ページ全面に戻す。
 MIN_TRIM_AREA_RATIO = 0.10
 
+# 分割線の自動検出（ノド検出）の既定値。
+# 既定位置からこの割合以内だけを探す。無関係な余白を「ノド」と誤認しないための安全策。
+DEFAULT_DIVIDER_SEARCH_RATIO = 0.12
+# 見つかった余白帯がこの幅未満なら「余白なし」として扱う（誤検出を避ける）。
+DEFAULT_DIVIDER_MIN_BAND_RATIO = 0.01
+# この明るさ以上を「ほぼ白（余白）」とみなす。
+DEFAULT_DIVIDER_WHITENESS = 250
+
 UNSHARP = ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=3)
 
 MEDIA_TYPES = {"png": "image/png", "jpeg": "image/jpeg"}
@@ -75,6 +83,74 @@ def find_content_bbox(
         min(1.0, (right + margin) / width),
         min(1.0, (bottom + margin) / height),
     )
+
+
+def _brightness_profile(image: Image.Image, axis: str) -> list[int]:
+    """軸ごとの平均輝度プロファイル。
+
+    ``Image.resize()`` を1列（または1行）へBOXフィルタで縮小すると、各列（行）の
+    平均輝度が1回の呼び出しで求まる。画素ごとにPythonループを回すより桁違いに速く、
+    numpy等の依存も要らない。
+    """
+    gray = to_grayscale(image)
+    if axis == "x":
+        strip = gray.resize((gray.width, 1), Image.Resampling.BOX)
+    else:
+        strip = gray.resize((1, gray.height), Image.Resampling.BOX)
+    return list(strip.getdata())
+
+
+def find_divider_offset(
+    image: Image.Image,
+    axis: str,
+    nominal: float,
+    search_ratio: float = DEFAULT_DIVIDER_SEARCH_RATIO,
+    min_band_ratio: float = DEFAULT_DIVIDER_MIN_BAND_RATIO,
+    whiteness_threshold: int = DEFAULT_DIVIDER_WHITENESS,
+) -> float | None:
+    """分割線の既定位置（``nominal``）付近で、最も余白の多い帯を探す。
+
+    見つかれば ``nominal`` からの相対オフセット（ページ寸法に対する比率）を返す。
+    見つからなければ ``None``（呼び出し側は既定位置のまま使う）。
+
+    探索を ``nominal`` の近傍だけに絞るのは、ページ全体から最大の余白を探すと
+    本文と無関係な場所（ページ上下の余白など）を誤って選びかねないため。
+    「元々ここに分割線を引くつもりだった」という位置の近傍だけを見ることで、
+    レイアウト選択という既存の意図を尊重しながら微修正するにとどめる。
+    """
+    axis = axis.lower()
+    size = image.width if axis == "x" else image.height
+    if size <= 0:
+        return None
+
+    profile = _brightness_profile(image, axis)
+
+    lo = max(0, int((nominal - search_ratio) * size))
+    hi = min(size, int((nominal + search_ratio) * size))
+    if hi <= lo:
+        return None
+
+    best: tuple[int, int] | None = None
+    run_start: int | None = None
+    for index in range(lo, hi):
+        if profile[index] >= whiteness_threshold:
+            if run_start is None:
+                run_start = index
+        elif run_start is not None:
+            run = (run_start, index)
+            if best is None or (run[1] - run[0]) > (best[1] - best[0]):
+                best = run
+            run_start = None
+    if run_start is not None:
+        run = (run_start, hi)
+        if best is None or (run[1] - run[0]) > (best[1] - best[0]):
+            best = run
+
+    if best is None or (best[1] - best[0]) < min_band_ratio * size:
+        return None
+
+    center = (best[0] + best[1]) / 2 / size
+    return center - nominal
 
 
 def crop_relative(image: Image.Image, rect: Rect) -> Image.Image:

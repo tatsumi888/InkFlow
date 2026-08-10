@@ -22,7 +22,7 @@
 │   layouts.py   分割レイアウト（純粋関数）             │  ← 外部ライブラリに依存しない
 │   devices.py   端末プリセット                       │
 │   renderer.py  PDF → PIL Image  (PyMuPDF)          │
-│   imaging.py   トリム/整形/量子化 (Pillow)           │
+│   imaging.py   トリム/整形/量子化/分割線検出 (Pillow) │
 │   cover.py     表紙生成 (Pillow)                    │
 │   epub_writer.py 固定レイアウトEPUB (zipfile)        │
 │   errors.py    例外階層                             │
@@ -42,6 +42,7 @@ Project
  ├ cover_image              任意指定の表紙画像（未指定なら自動生成）
  ├ defaults: PageDefaults   新規ページの既定値 ＋ 分割の共通パラメータ
  │   ├ layout_id / include_overview / rotate
+ │   ├ column_bias / row_bias  分割線の手動オフセット一括設定。None なら自動検出
  │   ├ overlap              コマ間の重なり（矩形自身のサイズ比）
  │   └ auto_trim / trim_threshold
  ├ image: ImageOptions      format / jpeg_quality / gray_levels / gamma /
@@ -53,7 +54,8 @@ Project
          ├ layout_id
          ├ include_overview
          ├ rotate           分割コマの縦横入替（0 / 90=右 / 270=左、時計回り）
-         └ rotate_overview  俯瞰の縦横入替。None なら分割コマと同じ
+         ├ rotate_overview  俯瞰の縦横入替。None なら分割コマと同じ
+         └ column_bias / row_bias  分割線の手動オフセット（±0.2）。None なら自動検出
 ```
 
 永続化は JSON（`*.inkflow.json`）。PDFパスは**プロジェクトファイルからの相対パス**で保存し、読み込み時に絶対化する。プロジェクトごと別ディレクトリへ移しても壊れない。未知のキーは無視し、欠けたキーは既定値で補う。
@@ -78,6 +80,8 @@ Project
 
 同じく「縦横入替」もレイアウトではなく `PageSpec.rotate` が持つ。横長のコマ（`half_v` / `third_v`）では回すと文字が1.33倍になるが、縦長のコマ（`quad_2col`）では0.75倍に悪化する。誌面依存なので自動判定はせず、ページ単位の人手選択とする。
 
+分割線の位置自体も固定ではない。`layouts.internal_dividers()` が rects から内部分割線（0/1を除く境界値）を逆算し、`composer.resolve_divider_offsets()` が本文の余白帯を自動検出してその位置へ寄せる（見つからなければ既定位置のまま）。`PageSpec.column_bias`/`row_bias` を指定すればその軸は自動検出せず手動値をそのまま使う。詳細は `docs/functional-design.md` の「分割線の自動検出・手動微調整」を参照。
+
 縦組み（右→左）は、矩形の並び順が違うレイアウトを追加し、spine の `page-progression-direction` を `rtl` に切り替えるだけで対応できる設計にしてある。
 
 ## 4. 再ページ化のパイプライン
@@ -91,9 +95,10 @@ Project
 4. 本レンダリング（1回だけ）    renderer.PdfDocument.render()
 5. 本文領域でクロップ
 6. 俯瞰ページを1枚（任意）
-7. レイアウト矩形ごとにクロップ  layouts.reading_rects()
-8. 縦横入替（指定時）           imaging.rotate_image()
-9. 各コマを仕上げ              imaging.finalize_page()
+7. 分割線オフセットの決定       composer.resolve_divider_offsets()（自動検出 or 手動指定）
+8. レイアウト矩形ごとにクロップ  layouts.reading_rects()
+9. 縦横入替（指定時）           imaging.rotate_image()
+10. 各コマを仕上げ              imaging.finalize_page()
 ```
 
 **高解像度レンダリングは1ページにつき1回**。俯瞰も各コマも同じラスタからのクロップで賄うため、40ページ×5コマ＝200枚を作る場合でもレンダリングは40回で済む。

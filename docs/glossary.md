@@ -74,6 +74,16 @@ InkFlowで使われる用語を定義する。日本語のドキュメント・�
 
 **英語表記**: Auto-trim / Content bbox detection
 
+### ノド／分割線の自動検出・手動微調整
+
+**定義**: 2段組等の内部分割線（「ノド」＝段と段の間の余白）が、版面の非対称な余白のせいで既定位置（多くは50%）からズレて本文を切ってしまう問題への対処。
+
+**説明**: `composer.resolve_divider_offsets()` が、既定位置の前後12%の範囲で最も広い余白帯を自動検出し、見つかればそこへ分割線を寄せる（見つからなければ既定位置のまま）。`PageSpec.column_bias`（左右）/`row_bias`（上下）を指定するとその軸は自動検出せず、指定値（±20%まで）をそのまま使う。GUIでは右パネルの「分割位置の微調整」（`[－][自動][＋]`）から、CLIでは `--column-bias`/`--row-bias` から操作する。
+
+**関連用語**: 分割コマ、オーバーラップ、`imaging.find_divider_offset()`、`layouts.internal_dividers()`
+
+**英語表記**: Gutter detection / Divider bias
+
 ### しおり
 
 **定義**: EPUB内の目次項目。1記事につき1つ作られ、その記事の先頭出力ページへ移動できる。
@@ -290,8 +300,9 @@ InkFlowで使われる用語を定義する。日本語のドキュメント・�
 - `include_overview`: 俯瞰を出力するか
 - `rotate`: 分割コマの縦横入替（0/90/270）
 - `rotate_overview`: 俯瞰の縦横入替（`None` = 分割コマと同じ）
+- `column_bias`/`row_bias`: 分割線の手動オフセット（±0.2。`None` = 自動検出に任せる）
 
-**制約**: `rotate_overview` が `None` の場合、`effective_overview_rotation()` が `rotate` の値を返す（「分割と同じ」の実体）。
+**制約**: `rotate_overview` が `None` の場合、`effective_overview_rotation()` が `rotate` の値を返す（「分割と同じ」の実体）。同様に `column_bias`/`row_bias` が `None` の場合は自動検出結果が使われる。
 
 ### `Device`
 
@@ -387,6 +398,23 @@ expanded = (max(0, x0-dx), max(0, y0-dy), min(1, x1+dx), min(1, y1+dy))
 ```
 dpi = max(俯瞰側のrequired_dpi, 分割コマ側のrequired_dpi)
 ```
+
+### 分割線の自動検出（ノド検出）
+
+**定義**: 内部分割線の既定位置付近から、最も広い「ほぼ白い帯」を探し、あれば分割線をその中央へ寄せる計算。
+
+**手順**:
+```
+1. Image.resize((width, 1) or (1, height), BOX) で列/行ごとの平均輝度プロファイルを得る
+2. nominal ± 12%（既定）の範囲だけを見る
+3. 輝度 ≥ 250（既定）が連続する最長区間を探す
+4. 区間幅 < 1%（既定）なら「余白帯なし」として None（既定位置のまま）
+5. 見つかった区間の中央と nominal の差分をオフセットとして返す
+```
+
+**実装箇所**: `inkflow/imaging.py` の `find_divider_offset()`、統合は `inkflow/composer.py` の `resolve_divider_offsets()`
+
+**補足**: 探索窓を12%に絞るのは、レイアウト選択という既存の意図と無関係な余白（ページ上下の余白など）を誤って選ばないため。
 
 **実装箇所**: `inkflow/composer.py` の `_required_dpi_for_page()`
 

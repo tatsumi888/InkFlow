@@ -83,10 +83,13 @@ class PageSpec:
     include_overview: bool          # ページ全体（俯瞰）を出力するか
     rotate: int                     # 分割コマの縦横入替（0/90/270、時計回り）
     rotate_overview: int | None     # 俯瞰の縦横入替。None = 分割コマと同じ
+    column_bias: float | None       # 左右の分割線の手動オフセット。None = 自動検出に任せる
+    row_bias: float | None          # 上下の分割線の手動オフセット。None = 自動検出に任せる
 ```
 
 **制約**:
 - `rotate` / `rotate_overview` は `{0, 90, 270}` のみ許容。範囲外の値は既定（`rotate_overview` は `None`）へ正規化される（例外にしない）。
+- `column_bias` / `row_bias` は `-0.2`〜`0.2` にクランプされる（`MAX_DIVIDER_BIAS`）。`None` は「自動検出に任せる」を意味し、`rotate_overview` の `None`=「分割コマと同じ」と同じ考え方。数値を指定した軸は自動検出を行わず、その値をそのまま使う（自動検出結果への加算ではない）。
 - `layout_id` が未知のIDなら既定レイアウトへフォールバックする。
 - 未知のJSONキーは無視し、欠けたキーは既定値で補う（前方・後方互換）。
 
@@ -112,6 +115,8 @@ erDiagram
         bool include_overview
         int rotate
         int rotate_overview
+        float column_bias
+        float row_bias
     }
 ```
 
@@ -268,6 +273,20 @@ def _required_dpi_for_page(content_w_in, content_h_in, spec, layout, device,
 - 各矩形を、**行を断つ向きにだけ**膨らませる（`Layout.overlap_axes`）。
 - 2段組（`quad_2col` 等）では縦方向にのみ広げる。段間（横方向）へ広げると隣の段の文字が混ざり、画面が無駄になるため。
 
+### 分割線の自動検出・手動微調整
+
+**背景**: `quad_2col` 等の分割線は既定でレイアウト定義どおりの位置（多くは50%）に固定される。実際の誌面は左右の段幅がわずかに非対称なことが多く、固定位置のままだと本文の途中で文字が切断されることがある（実サンプルで確認済みの不具合）。
+
+**アルゴリズム**（`composer.resolve_divider_offsets()`）:
+1. `layouts.internal_dividers(layout_id)` でレイアウトが持つ内部分割線の位置（0〜1の相対座標）を rects から逆算する。
+2. 軸ごとに、`PageSpec.column_bias`/`row_bias` が指定されていればその値を全分割線に一律適用する（自動検出は行わない）。
+3. 指定が無ければ `imaging.find_divider_offset()` で分割線ごとに自動検出する。既定位置の**前後12%の範囲**でいちばん広い「ほぼ白い帯」（BOXフィルタで縮小した輝度プロファイルから求める）を探し、見つかった帯の中央へ寄せる。適した帯が見つからなければオフセット無し（既定位置のまま）にフォールバックする。
+4. 求めたオフセットを `layouts.apply_divider_offsets()` で rects に反映してから、オーバーラップ拡張を適用する（順序: **オフセット→オーバーラップ**。逆にするとオーバーラップの基準矩形がズレる）。
+
+**探索窓を12%に絞る理由**: ページ全体から最大の余白を探すと、レイアウト選択という既存の意図と無関係な場所（ページ上下の余白など）を誤って選びかねない。「元々ここに分割線を引くつもりだった」位置の近傍だけを見ることで、既定レイアウトの意図を尊重したうえでの微修正にとどめる。
+
+**GUI連携**: プレビュー（`page_view.py`）も同じ `resolve_divider_offsets()` を通した実際の矩形で枠を描く。自動検出が誤る場合は右パネルの「分割位置の微調整」（`[－][自動][＋]`、1クリック1%）で軸ごとに手動オーバーライドできる。
+
 ## UI設計
 
 ### メインウィンドウの3ペイン構成
@@ -276,7 +295,7 @@ def _required_dpi_for_page(content_w_in, content_h_in, spec, layout, device,
 |---|---|
 | 左（記事ツリー） | 記事の追加・削除・並べ替え・しおり名編集。ページ行にはレイアウト・出力枚数・回転設定を表示 |
 | 中央（プレビュー） | 現在ページのサムネイル＋分割枠・読み順番号・余白トリム位置（緑の破線）・回転バッジをオーバーレイ表示 |
-| 右（操作パネル） | レイアウト選択（ラジオ＋数字キー）、俯瞰の有無、分割コマ／俯瞰それぞれの縦横入替、一括適用ボタン、EPUB出力 |
+| 右（操作パネル） | レイアウト選択（ラジオ＋数字キー）、俯瞰の有無、分割コマ／俯瞰それぞれの縦横入替、分割位置の微調整（左右・上下）、一括適用ボタン、EPUB出力 |
 
 ### 色分け（プレビューのバッジ）
 
@@ -306,12 +325,14 @@ def _required_dpi_for_page(content_w_in, content_h_in, spec, layout, device,
   "device": "paperwhite_11",
   "cover_image": null,
   "defaults": { "layout": "quad_2col", "overview": true, "rotate": 0, "rotate_overview": null,
+                "column_bias": null, "row_bias": null,
                 "overlap": 0.03, "auto_trim": true, "trim_threshold": 245 },
   "image": { "format": "png", "jpeg_quality": 85, "gray_levels": 16, "gamma": 1.0,
              "contrast_cutoff": 0.5, "sharpen": true },
   "articles": [
     { "path": "articles/01_巻頭特集.pdf", "title": "巻頭特集",
-      "pages": [ { "layout": "quad_2col", "overview": true, "rotate": 0, "rotate_overview": null } ] }
+      "pages": [ { "layout": "quad_2col", "overview": true, "rotate": 0, "rotate_overview": null,
+                   "column_bias": null, "row_bias": null } ] }
   ]
 }
 ```

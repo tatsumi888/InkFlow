@@ -401,4 +401,90 @@ def test_cli_and_gui_paths_produce_identical_pages(tmp_path, folder_with_pdfs):
         images_b = {n: b.read(n) for n in b.namelist() if n.startswith("OEBPS/images/")}
         assert images_a.keys() == images_b.keys()
         assert images_a == images_b
+
+
+# ---- 分割線の手動微調整（--column-bias / --row-bias） ---------------------
+
+
+def test_column_bias_option_is_stored_in_project(tmp_path, folder_with_pdfs):
+    output = tmp_path / "biased.inkflow.json"
+    assert cli.main(
+        ["init", str(folder_with_pdfs), "-o", str(output), "--column-bias", "0.05"]
+    ) == 0
+
+    project = Project.load(output)
+    assert project.defaults.column_bias == pytest.approx(0.05)
+    assert all(
+        page.column_bias == pytest.approx(0.05) for a in project.articles for page in a.pages
+    )
+
+
+def test_row_bias_option_is_stored_in_project(tmp_path, folder_with_pdfs):
+    output = tmp_path / "biased.inkflow.json"
+    assert cli.main(
+        ["init", str(folder_with_pdfs), "-o", str(output), "--row-bias", "-0.1"]
+    ) == 0
+
+    project = Project.load(output)
+    assert project.defaults.row_bias == pytest.approx(-0.1)
+    assert all(
+        page.row_bias == pytest.approx(-0.1) for a in project.articles for page in a.pages
+    )
+
+
+def test_bias_option_is_clamped_to_max(tmp_path, folder_with_pdfs):
+    output = tmp_path / "clamped.inkflow.json"
+    cli.main(["init", str(folder_with_pdfs), "-o", str(output), "--column-bias", "999"])
+    assert Project.load(output).defaults.column_bias == pytest.approx(0.2)
+
+
+def test_column_bias_changes_output(tmp_path, folder_with_pdfs):
+    plain = tmp_path / "plain.epub"
+    biased = tmp_path / "biased.epub"
+    common = ["--layout", "quad_2col", "--device", TEST_DEVICE, "--quiet"]
+    cli.main(["build", str(folder_with_pdfs), "-o", str(plain), *common])
+    cli.main(
+        ["build", str(folder_with_pdfs), "-o", str(biased), "--column-bias", "0.1", *common]
+    )
+
+    with zipfile.ZipFile(plain) as a, zipfile.ZipFile(biased) as b:
+        assert a.read("OEBPS/images/p0001.png") != b.read("OEBPS/images/p0001.png")
+
+
+def test_bias_overrides_project_file(tmp_path, folder_with_pdfs):
+    project_path = tmp_path / "book.inkflow.json"
+    cli.main(["init", str(folder_with_pdfs), "-o", str(project_path), "--device", TEST_DEVICE])
+    assert Project.load(project_path).defaults.column_bias is None
+
+    plain = tmp_path / "plain.epub"
+    overridden = tmp_path / "overridden.epub"
+    common = ["--layout", "quad_2col", "--quiet"]
+    cli.main(["build", str(project_path), "-o", str(plain), *common])
+    cli.main(
+        ["build", str(project_path), "-o", str(overridden), "--column-bias", "0.1", *common]
+    )
+
+    with zipfile.ZipFile(plain) as a, zipfile.ZipFile(overridden) as b:
+        assert a.read("OEBPS/images/p0001.png") != b.read("OEBPS/images/p0001.png")
+
+
+def test_without_bias_option_keeps_project_value(tmp_path, folder_with_pdfs):
+    """`--column-bias` を付けなければ、プロジェクトの設定を上書きしない。"""
+    project_path = tmp_path / "book.inkflow.json"
+    cli.main(
+        ["init", str(folder_with_pdfs), "-o", str(project_path),
+         "--device", TEST_DEVICE, "--column-bias", "0.08"]
+    )
+    common = ["--layout", "quad_2col", "--quiet"]
+
+    kept = tmp_path / "kept.epub"
+    cli.main(["build", str(project_path), "-o", str(kept), *common])
+
+    explicit = tmp_path / "explicit.epub"
+    cli.main(
+        ["build", str(project_path), "-o", str(explicit), "--column-bias", "0.08", *common]
+    )
+
+    with zipfile.ZipFile(kept) as a, zipfile.ZipFile(explicit) as b:
+        assert a.read("OEBPS/images/p0001.png") == b.read("OEBPS/images/p0001.png")
         assert a.read("OEBPS/nav.xhtml") == b.read("OEBPS/nav.xhtml")

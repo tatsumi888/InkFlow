@@ -48,13 +48,13 @@ UI 層          inkflow/gui/          inkflow/cli.py
 
 | モジュール | 責務 |
 |---|---|
-| `layouts.py` | 分割レイアウト＝「相対矩形の**読み順リスト**」。純粋関数のみ |
+| `layouts.py` | 分割レイアウト＝「相対矩形の**読み順リスト**」。内部分割線位置の逆算（`internal_dividers`）とオフセット適用（`apply_divider_offsets`）も含む。純粋関数のみ |
 | `models.py` | `PageSpec` / `Article` / `Project` と JSON 永続化 |
 | `devices.py` | 端末解像度のプリセット |
 | `renderer.py` | PDF → PIL画像（PyMuPDF）。必要DPIの算出、プレビュー用LRUキャッシュ |
-| `imaging.py` | 余白トリム・クロップ・正規化・階調調整・量子化 |
+| `imaging.py` | 余白トリム・クロップ・正規化・階調調整・量子化・分割線（ノド）の自動検出（`find_divider_offset`） |
 | `cover.py` | 表紙生成 |
-| `composer.py` | `Project` → 出力ページ列（ジェネレータ） |
+| `composer.py` | `Project` → 出力ページ列（ジェネレータ）。分割線オフセットの自動検出/手動指定の統合（`resolve_divider_offsets`） |
 | `epub_writer.py` | 固定レイアウトEPUB（zipfile で直接組み立て） |
 | `builder.py` | composer と epub_writer を繋ぐ。**CLI と GUI の共通経路** |
 | `buildinfo.py` | バージョン・ビルド日時・ソースコミットの表示文言（`--version` / `selftest` / GUIの「バージョン情報」） |
@@ -86,6 +86,12 @@ CLI と GUI が同じ出力になるのは `builder.build_epub()` を共有し�
 ### 3-4. `PageSpec` を組み立てるときは `replace()`
 
 GUI でレイアウトや俯瞰を変える処理は `dataclasses.replace(spec, ...)` を使う。`PageSpec(...)` と手で組み立てると、フィールドを増やしたときに設定（現状は `rotate`）が黙って初期値へ戻る。
+
+### 3-5. 分割線の自動検出は「探索窓の外」を見ない／手動指定は上書きであって加算ではない
+
+`imaging.find_divider_offset()` は既定位置の**前後12%だけ**を探す（`DEFAULT_DIVIDER_SEARCH_RATIO`）。窓を外れた位置に本当のノドがあっても検出しない（＝既定位置のまま）。「レイアウト選択という既存の意図を尊重したうえでの微修正」という設計判断なので、ズレの大きいページは `column_bias`/`row_bias` の手動指定で救う想定。テストで大きな非対称PDFを作るときは、この12%窓に収まる程度のズレにしないと「検出できて当然」の期待が外れる（実際にこれで一度テストを書き間違えた）。
+
+`PageSpec.column_bias`/`row_bias` が `None` でなければ、その軸は自動検出を**一切行わず**、指定値をすべての分割線に一律適用する（`composer.resolve_divider_offsets`）。「自動検出結果に手動値を足し込む」ではない。
 
 ### 4. `composer.compose()` はジェネレータ
 

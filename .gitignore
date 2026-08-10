@@ -11,3 +11,6 @@ out/
 *.epub
 *.inkflow.json
 inkflow/_generated_build_info.py
+
+# 実物の雑誌PDF（動作確認用）。テストには持ち込まない方針のためコミットしない。
+sample/

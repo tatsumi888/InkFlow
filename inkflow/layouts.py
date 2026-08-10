@@ -165,11 +165,62 @@ def expand_rect(rect: Rect, overlap: float, axes: tuple[str, ...] = ("x", "y")) 
     )
 
 
-def reading_rects(layout_id: str, overlap: float = DEFAULT_OVERLAP) -> tuple[Rect, ...]:
-    """レイアウトの矩形を読み順で返す（オーバーラップ適用済み）。"""
+def internal_dividers(layout_id: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """レイアウト内部の分割線位置を (x方向の一覧, y方向の一覧) で返す。
+
+    追加の定義を持たず、``Layout.rects`` の境界値から逆算する。レイアウト定義を
+    変えたときに分割線位置の一覧が二重管理でズレることがないようにするため。
+    ページ端（0.0 / 1.0）は分割線ではないので含めない。
+    """
+    layout = get_layout(layout_id)
+    xs = sorted(
+        {round(v, 6) for x0, _, x1, _ in layout.rects for v in (x0, x1) if 1e-6 < v < 1 - 1e-6}
+    )
+    ys = sorted(
+        {round(v, 6) for _, y0, _, y1 in layout.rects for v in (y0, y1) if 1e-6 < v < 1 - 1e-6}
+    )
+    return (tuple(xs), tuple(ys))
+
+
+def apply_divider_offsets(
+    layout_id: str,
+    x_offsets: dict[float, float] | None = None,
+    y_offsets: dict[float, float] | None = None,
+) -> tuple[Rect, ...]:
+    """検出/指定したオフセットで分割線をずらした矩形列を返す（読み順は変えない）。
+
+    ページ端（0.0 / 1.0）は動かさない。オフセットが無い分割線はそのまま。
+    """
+    layout = get_layout(layout_id)
+    if not x_offsets and not y_offsets:
+        return layout.rects
+
+    def shift(value: float, offsets: dict[float, float] | None) -> float:
+        if not offsets or value <= 1e-6 or value >= 1 - 1e-6:
+            return value
+        return min(1.0, max(0.0, value + offsets.get(round(value, 6), 0.0)))
+
+    return tuple(
+        (shift(x0, x_offsets), shift(y0, y_offsets), shift(x1, x_offsets), shift(y1, y_offsets))
+        for x0, y0, x1, y1 in layout.rects
+    )
+
+
+def reading_rects(
+    layout_id: str,
+    overlap: float = DEFAULT_OVERLAP,
+    x_offsets: dict[float, float] | None = None,
+    y_offsets: dict[float, float] | None = None,
+) -> tuple[Rect, ...]:
+    """レイアウトの矩形を読み順で返す（分割線オフセット→オーバーラップの順に適用）。
+
+    オフセットを先に適用してからオーバーラップを広げる。逆にすると、オーバーラップの
+    基準となる矩形そのものがズレてしまう。
+    """
     layout = get_layout(layout_id)
     overlap = clamp_overlap(overlap)
-    return tuple(expand_rect(r, overlap, layout.overlap_axes) for r in layout.rects)
+    base_rects = apply_divider_offsets(layout_id, x_offsets, y_offsets)
+    return tuple(expand_rect(r, overlap, layout.overlap_axes) for r in base_rects)
 
 
 def clamp_overlap(overlap: float) -> float:

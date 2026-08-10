@@ -1,6 +1,8 @@
+from pathlib import Path
+
 import pytest
 
-from inkflow import composer, devices
+from inkflow import composer, devices, imaging, layouts
 from inkflow.builder import project_from_pdfs
 from inkflow.models import PageDefaults, PageSpec, Project
 
@@ -394,3 +396,170 @@ def test_content_rect_for_respects_auto_trim(single_page_pdf):
         cache.close()
     assert off == (0.0, 0.0, 1.0, 1.0)
     assert on[0] > 0.0 and on[2] < 1.0
+
+
+# ---- 分割線の自動検出・手動微調整 -----------------------------------------
+
+
+def edge_ink_ratio(image, side: str, band_px: int = 6) -> float:
+    """クロップの指定した縁ぎりぎりの帯にどれだけ文字（黒画素）が写り込んでいるか。
+
+    分割線が本当にノド（空白）に来ていれば、そのコマの縁は白いはず。段の途中で
+    切れていれば、縁のすぐそばに文字の断片が写り込む。
+    """
+    gray = image.convert("L")
+    width, height = gray.size
+    if side == "left":
+        box = (0, 0, band_px, height)
+    elif side == "right":
+        box = (width - band_px, 0, width, height)
+    else:
+        raise ValueError(side)
+    band = gray.crop(box)
+    pixels = list(band.getdata())
+    return sum(1 for value in pixels if value < 200) / len(pixels)
+
+
+def _raw_part_crops(
+    pdf_path: Path,
+    layout_id: str,
+    column_bias: float | None = None,
+    row_bias: float | None = None,
+    dpi: float = 200.0,
+):
+    """finalize_page（端末フィット・パディング）を経由しない、素のコマ画像列。
+
+    パディングが縁を白く塗りつぶしてしまい、実際の分割位置がノドに来ているか
+    どうかを画像の縁で判定できなくなるため、テストでは常にこちらを使う。
+    """
+    from inkflow import renderer
+
+    with renderer.PdfDocument(pdf_path) as document:
+        page_image = document.render(0, dpi)
+    content_rect = imaging.find_content_bbox(page_image)
+    content = imaging.crop_relative(page_image, content_rect)
+
+    x_offsets, y_offsets = composer.resolve_divider_offsets(
+        content, layout_id, column_bias, row_bias
+    )
+    rects = layouts.reading_rects(layout_id, 0.0, x_offsets, y_offsets)
+    return [imaging.crop_relative(content, rect) for rect in rects]
+
+
+def test_auto_gutter_detection_reduces_text_bleed_at_the_split(tmp_path):
+    """真のノドが50%からズレた誌面で、自動検出が文字の巻き込みを減らす。
+
+    ずれ幅は既定の検索窓（±12%）に収まる 0.08 とする（窓の外は検出できない仕様）。
+    """
+    from .conftest import make_asymmetric_pdf
+
+    pdf = make_asymmetric_pdf(tmp_path / "asym.pdf", gutter_center_ratio=0.42)
+
+    auto_crops = _raw_part_crops(pdf, "quad_2col")
+    forced_crops = _raw_part_crops(pdf, "quad_2col", column_bias=0.0)
+
+    # 右上コマ（part_index 2）の左端が、自動検出では文字を避けている。
+    auto_bleed = edge_ink_ratio(auto_crops[2], "left")
+    forced_bleed = edge_ink_ratio(forced_crops[2], "left")
+    assert auto_bleed < forced_bleed
+
+
+def test_manual_column_bias_overrides_auto_detection(tmp_path):
+    """手動でバイアスを指定した軸は自動検出を行わず、指定位置をそのまま使う。"""
+    from .conftest import make_asymmetric_pdf
+
+    pdf = make_asymmetric_pdf(tmp_path / "asym.pdf", gutter_center_ratio=0.35)
+
+    # 本来のノド付近（-0.15）を手動指定 → 文字を避けられる。
+    good_crops = _raw_part_crops(pdf, "quad_2col", column_bias=-0.15)
+    # わざと逆方向にずらす → 文字を巻き込む。
+    bad_crops = _raw_part_crops(pdf, "quad_2col", column_bias=0.15)
+
+    assert edge_ink_ratio(good_crops[2], "left") < edge_ink_ratio(bad_crops[2], "left")
+
+
+def test_row_bias_shifts_the_horizontal_split(single_page_pdf):
+    project = make_project([single_page_pdf])
+    project.apply_layout_to_all(PageSpec("half_v", include_overview=False, row_bias=0.15))
+    pages = list(composer.compose(project))
+
+    baseline = make_project([single_page_pdf])
+    baseline.apply_layout_to_all(PageSpec("half_v", include_overview=False))
+    baseline_pages = list(composer.compose(baseline))
+
+    assert pages[0].image.tobytes() != baseline_pages[0].image.tobytes()
+
+
+def test_no_usable_whitespace_falls_back_to_nominal_position(tmp_path):
+    """余白の無いページ（全面塗りつぶし）では、自動検出が働かず既定位置のまま。"""
+    import pymupdf
+
+    from .conftest import B5_HEIGHT_PT, B5_WIDTH_PT
+
+    pdf_path = tmp_path / "solid.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=B5_WIDTH_PT, height=B5_HEIGHT_PT)
+    page.draw_rect(page.rect, fill=(0, 0, 0), color=None)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    crops = _raw_part_crops(pdf_path, "quad_2col")
+
+    # 既定（50%）どおりに切られていること＝どのコマも真っ黒（余白が写り込んでいない）。
+    for crop in crops:
+        assert edge_ink_ratio(crop, "left") == pytest.approx(1.0, abs=0.05)
+
+
+def test_output_page_count_is_unaffected_by_bias(single_page_pdf):
+    project = make_project([single_page_pdf])
+    project.apply_layout_to_all(PageSpec("quad_2col", column_bias=0.05, row_bias=-0.05))
+    assert len(list(composer.compose(project))) == 5
+
+
+def test_projects_without_bias_fields_produce_identical_output(single_page_pdf):
+    """None（既定値）は自動検出に任せる意味であり、明示的に None を渡しても同じ。"""
+    implicit = make_project([single_page_pdf])
+    explicit = make_project([single_page_pdf])
+    explicit.apply_layout_to_all(PageSpec("quad_2col", column_bias=None, row_bias=None))
+
+    for left, right in zip(composer.compose(implicit), composer.compose(explicit)):
+        assert left.image.tobytes() == right.image.tobytes()
+
+
+def test_resolve_divider_offsets_detects_the_true_gutter(tmp_path):
+    """resolve_divider_offsets が、実際のレンダリング画像から正しいノド位置を導く。
+
+    ずれ幅は既定の検索窓（±12%）に収まる範囲で検証する。
+    """
+    from inkflow import renderer
+
+    from .conftest import make_asymmetric_pdf
+
+    pdf = make_asymmetric_pdf(tmp_path / "asym.pdf", gutter_center_ratio=0.4)
+    with renderer.PdfDocument(pdf) as document:
+        page_image = document.render(0, 150)
+        content_rect = imaging.find_content_bbox(page_image)
+        content = imaging.crop_relative(page_image, content_rect)
+
+    x_offsets, _ = composer.resolve_divider_offsets(content, "quad_2col", None, None)
+    assert 0.5 in x_offsets
+    assert 0.5 + x_offsets[0.5] == pytest.approx(0.4, abs=0.03)
+
+
+def test_resolve_divider_offsets_full_layout_has_no_dividers(single_page_pdf):
+    from inkflow import renderer
+
+    with renderer.PdfDocument(single_page_pdf) as document:
+        content = document.render(0, 100)
+    x_offsets, y_offsets = composer.resolve_divider_offsets(content, "full", None, None)
+    assert x_offsets == {}
+    assert y_offsets == {}
+
+
+def test_preview_rects_accepts_offsets():
+    plain = composer.preview_rects(PageSpec("quad_2col"), PageDefaults(overlap=0.0))
+    shifted = composer.preview_rects(
+        PageSpec("quad_2col"), PageDefaults(overlap=0.0), x_offsets={0.5: 0.1}
+    )
+    assert shifted[0][2] == pytest.approx(0.6)
+    assert shifted != plain

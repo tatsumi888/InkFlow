@@ -150,8 +150,47 @@ def _compose_page(
     if spec.include_overview:
         yield (to_output(content, overview_rotation), -1, True)
 
-    for part_index, rect in enumerate(layouts.reading_rects(spec.layout_id, defaults.overlap)):
+    x_offsets, y_offsets = resolve_divider_offsets(
+        content, spec.layout_id, spec.column_bias, spec.row_bias
+    )
+    rects = layouts.reading_rects(spec.layout_id, defaults.overlap, x_offsets, y_offsets)
+    for part_index, rect in enumerate(rects):
         yield (to_output(imaging.crop_relative(content, rect), spec.rotate), part_index, False)
+
+
+def resolve_divider_offsets(
+    content_image: Image.Image,
+    layout_id: str,
+    column_bias: float | None,
+    row_bias: float | None,
+) -> tuple[dict[float, float], dict[float, float]]:
+    """このページで実際に使う分割線オフセットを決める。
+
+    軸ごとに、手動指定（``column_bias``/``row_bias``）があればそれを全ての分割線に
+    一律適用し、自動検出は行わない。手動指定が無ければ分割線ごとに自動検出する
+    （見つからなければオフセット無し＝既定位置のまま。安全側のフォールバック）。
+    """
+    xs, ys = layouts.internal_dividers(layout_id)
+
+    if column_bias is not None:
+        x_offsets = dict.fromkeys(xs, column_bias)
+    else:
+        x_offsets = {
+            x: offset
+            for x in xs
+            if (offset := imaging.find_divider_offset(content_image, "x", x)) is not None
+        }
+
+    if row_bias is not None:
+        y_offsets = dict.fromkeys(ys, row_bias)
+    else:
+        y_offsets = {
+            y: offset
+            for y in ys
+            if (offset := imaging.find_divider_offset(content_image, "y", y)) is not None
+        }
+
+    return (x_offsets, y_offsets)
 
 
 def _required_dpi_for_page(
@@ -199,9 +238,18 @@ def _required_dpi_for_page(
     return max(requirements)
 
 
-def preview_rects(spec: PageSpec, defaults: PageDefaults) -> tuple[tuple[float, ...], ...]:
-    """GUI が枠を描くための矩形列（本文領域を基準とした相対座標）。"""
-    return layouts.reading_rects(spec.layout_id, defaults.overlap)
+def preview_rects(
+    spec: PageSpec,
+    defaults: PageDefaults,
+    x_offsets: dict[float, float] | None = None,
+    y_offsets: dict[float, float] | None = None,
+) -> tuple[tuple[float, ...], ...]:
+    """GUI が枠を描くための矩形列（本文領域を基準とした相対座標）。
+
+    ``x_offsets``/``y_offsets`` を渡すと、実際の出力と同じ位置（自動検出 or 手動
+    微調整の結果）で枠を描ける。省略時はレイアウトの既定位置のまま。
+    """
+    return layouts.reading_rects(spec.layout_id, defaults.overlap, x_offsets, y_offsets)
 
 
 def content_rect_for(

@@ -14,12 +14,14 @@ from pathlib import Path
 from . import builder, buildinfo, composer, devices, layouts
 from .errors import InkFlowError
 from .models import (
+    MAX_DIVIDER_BIAS,
     ROTATION_CCW,
     ROTATION_CW,
     ROTATION_NONE,
     ImageOptions,
     PageDefaults,
     Project,
+    normalize_optional_bias,
 )
 
 ROTATE_CHOICES = {"none": ROTATION_NONE, "cw": ROTATION_CW, "ccw": ROTATION_CCW}
@@ -127,6 +129,19 @@ def _add_project_options(parser: argparse.ArgumentParser) -> None:
         help=f"コマ間の重なり（0〜{layouts.MAX_OVERLAP}、既定: {layouts.DEFAULT_OVERLAP}）",
     )
     parser.add_argument("--no-trim", action="store_true", help="余白の自動トリムを行わない")
+    parser.add_argument(
+        "--column-bias",
+        type=float,
+        default=None,
+        help=f"左右の分割位置を手動でずらす（-{MAX_DIVIDER_BIAS}〜{MAX_DIVIDER_BIAS}、"
+        "既定: 自動検出）。2段組の版面バランスが悪く自動検出で誤る場合に使う",
+    )
+    parser.add_argument(
+        "--row-bias",
+        type=float,
+        default=None,
+        help=f"上下の分割位置を手動でずらす（-{MAX_DIVIDER_BIAS}〜{MAX_DIVIDER_BIAS}、既定: 自動検出）",
+    )
     parser.add_argument(
         "--format", dest="image_format", choices=["png", "jpeg"], default=None,
         help="ページ画像の形式（既定: png）",
@@ -352,6 +367,10 @@ def _defaults_from_args(args: argparse.Namespace) -> PageDefaults:
         defaults.overlap = layouts.clamp_overlap(args.overlap)
     if args.no_trim:
         defaults.auto_trim = False
+    if args.column_bias is not None:
+        defaults.column_bias = normalize_optional_bias(args.column_bias)
+    if args.row_bias is not None:
+        defaults.row_bias = normalize_optional_bias(args.row_bias)
     return defaults
 
 
@@ -387,6 +406,18 @@ def _override_project(project: Project, args: argparse.Namespace) -> None:
         project.defaults.overlap = layouts.clamp_overlap(args.overlap)
     if args.no_trim:
         project.defaults.auto_trim = False
+    if args.column_bias is not None:
+        bias = normalize_optional_bias(args.column_bias)
+        project.defaults.column_bias = bias
+        for article in project.articles:
+            for page in article.pages:
+                page.column_bias = bias
+    if args.row_bias is not None:
+        bias = normalize_optional_bias(args.row_bias)
+        project.defaults.row_bias = bias
+        for article in project.articles:
+            for page in article.pages:
+                page.row_bias = bias
 
 
 def _apply_image_options(project: Project, args: argparse.Namespace) -> None:

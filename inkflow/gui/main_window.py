@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import APP_NAME, builder, buildinfo, composer, layouts, renderer
+from .. import APP_NAME, builder, buildinfo, composer, imaging, layouts, renderer
 from ..errors import InkFlowError
 from ..models import (
     PROJECT_SUFFIX,
@@ -45,6 +45,7 @@ from ..models import (
     ROTATIONS,
     PageSpec,
     Project,
+    normalize_optional_bias,
 )
 
 # 俯瞰の向きの選択肢。None は「分割コマと同じ」。
@@ -54,6 +55,9 @@ from .settings_dialog import BookSettingsDialog
 from .worker import BuildWorker
 
 PREVIEW_DPI = 110
+
+# 分割位置の微調整パネルで、[－]/[＋] 1クリックあたり動かす量。
+DIVIDER_BIAS_STEP = 0.01
 
 # Send to Kindle のメール添付の上限と、超えたときの対処。
 SIZE_WARNING_MB = 50
@@ -99,6 +103,9 @@ class MainWindow(QMainWindow):
         # ファイル選択ダイアログで最後に実際に使われたフォルダ。
         # 記事PDF追加・プロジェクト保存・EPUB出力の3つで共有する。
         self._last_browsed_dir: Path | None = None
+        # 直近のプレビューで実際に使われた分割線オフセット（自動検出結果を含む）。
+        # サイドパネルのラベル表示に使う。_update_preview() の直後に必ず更新される。
+        self._current_divider_offsets: tuple[dict[float, float], dict[float, float]] = ({}, {})
 
         self.setWindowTitle(APP_NAME)
         self.resize(1180, 820)
@@ -250,6 +257,28 @@ class MainWindow(QMainWindow):
         overview_layout.addStretch(1)
         self.overview_rotation_group.idToggled.connect(self._on_overview_rotation_selected)
         group_layout.addWidget(overview_row)
+
+        group_layout.addSpacing(6)
+        group_layout.addWidget(QLabel("分割位置の微調整"))
+        self.column_bias_row, self.column_bias_buttons, self.column_bias_label = (
+            self._build_bias_row(
+                "左右",
+                "2段組などの分割線が本文の途中を切ってしまう場合に使う。"
+                "［自動］に戻すと余白を自動検出した位置に任せる。",
+                lambda: self.adjust_column_bias(-DIVIDER_BIAS_STEP),
+                self.reset_column_bias,
+                lambda: self.adjust_column_bias(DIVIDER_BIAS_STEP),
+            )
+        )
+        group_layout.addWidget(self.column_bias_row)
+        self.row_bias_row, self.row_bias_buttons, self.row_bias_label = self._build_bias_row(
+            "上下",
+            "上下2分割・3分割などの分割線がずれる場合に使う。",
+            lambda: self.adjust_row_bias(-DIVIDER_BIAS_STEP),
+            self.reset_row_bias,
+            lambda: self.adjust_row_bias(DIVIDER_BIAS_STEP),
+        )
+        group_layout.addWidget(self.row_bias_row)
         layout.addWidget(group)
 
         apply_group = QGroupBox("まとめて適用")
@@ -277,6 +306,40 @@ class MainWindow(QMainWindow):
         export_button.clicked.connect(self.export_epub)
         layout.addWidget(export_button)
         return panel
+
+    @staticmethod
+    def _build_bias_row(
+        axis_label: str,
+        tooltip: str,
+        on_minus,
+        on_auto,
+        on_plus,
+    ) -> tuple[QWidget, tuple[QToolButton, QToolButton, QToolButton], QLabel]:
+        """「左右」「上下」の分割位置微調整に使う [－][自動][＋] + 現在値ラベルの1行。"""
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(QLabel(axis_label))
+
+        minus_button = QToolButton()
+        minus_button.setText("－")
+        minus_button.setToolTip(tooltip)
+        minus_button.clicked.connect(on_minus)
+        auto_button = QToolButton()
+        auto_button.setText("自動")
+        auto_button.setToolTip("自動検出に戻す")
+        auto_button.clicked.connect(on_auto)
+        plus_button = QToolButton()
+        plus_button.setText("＋")
+        plus_button.setToolTip(tooltip)
+        plus_button.clicked.connect(on_plus)
+        for button in (minus_button, auto_button, plus_button):
+            row_layout.addWidget(button)
+
+        label = QLabel("—")
+        row_layout.addWidget(label)
+        row_layout.addStretch(1)
+        return row, (minus_button, auto_button, plus_button), label
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("ファイル(&F)")
@@ -438,6 +501,7 @@ class MainWindow(QMainWindow):
             self.page_view.clear("PDFを追加してください（ドラッグ＆ドロップでも追加できます）")
             self.page_label.setText("—")
             self.position_label.setText("0 / 0")
+            self._current_divider_offsets = ({}, {})
             return
 
         article_index, page_index = self._flat[self._current]
@@ -468,9 +532,18 @@ class MainWindow(QMainWindow):
             )
         except InkFlowError as e:
             self.page_view.clear(f"プレビューを表示できません\n{e}")
+            self._current_divider_offsets = ({}, {})
             return
 
-        rects = composer.preview_rects(spec, self.project.defaults)
+        # 実際の出力と同じ resolve_divider_offsets() を通す。プレビューの枠と
+        # 出力結果が一致することを保証するため（自動検出の結果もここで分かる）。
+        content_image = imaging.crop_relative(image, content_rect)
+        x_offsets, y_offsets = composer.resolve_divider_offsets(
+            content_image, spec.layout_id, spec.column_bias, spec.row_bias
+        )
+        self._current_divider_offsets = (x_offsets, y_offsets)
+
+        rects = composer.preview_rects(spec, self.project.defaults, x_offsets, y_offsets)
         is_full = spec.layout_id == "full"
         self.page_view.set_page(
             image,
@@ -502,6 +575,8 @@ class MainWindow(QMainWindow):
         for button in self.overview_rotation_buttons.values():
             button.setEnabled(enabled)
         self.overview_check.setEnabled(enabled)
+        for button in (*self.column_bias_buttons, *self.row_bias_buttons):
+            button.setEnabled(enabled)
         if spec is None:
             return
 
@@ -531,6 +606,34 @@ class MainWindow(QMainWindow):
         self.overview_rotation_group.blockSignals(False)
         for button in self.overview_rotation_buttons.values():
             button.setEnabled(shows_overview)
+
+        xs, ys = layouts.internal_dividers(spec.layout_id)
+        x_offsets, y_offsets = self._current_divider_offsets
+        for button in self.column_bias_buttons:
+            button.setEnabled(bool(xs))
+        self.column_bias_label.setText(self._bias_label_text(spec.column_bias, xs, x_offsets))
+        for button in self.row_bias_buttons:
+            button.setEnabled(bool(ys))
+        self.row_bias_label.setText(self._bias_label_text(spec.row_bias, ys, y_offsets))
+
+    @staticmethod
+    def _bias_label_text(
+        bias: float | None, dividers: tuple[float, ...], offsets: dict[float, float]
+    ) -> str:
+        """分割位置微調整の現在値ラベル。手動値、または自動検出の結果を表示する。
+
+        複数の分割線を持つレイアウト（six_2col など）でも、手動値は全線に一律
+        適用されるので代表として先頭の分割線だけを見れば足りる。自動検出も、
+        各線が同じ余白帯を見つけていることが多いページ想定で先頭を代表値とする。
+        """
+        if not dividers:
+            return "—"
+        if bias is not None:
+            return f"手動 {bias * 100:+.1f}%"
+        detected = offsets.get(dividers[0])
+        if detected is None:
+            return "自動（既定位置）"
+        return f"自動（{detected * 100:+.1f}%）"
 
     def _update_summary(self) -> None:
         source_pages = sum(len(a.pages) for a in self.project.articles)
@@ -619,6 +722,38 @@ class MainWindow(QMainWindow):
         self.set_overview_rotation(
             OVERVIEW_ROTATION_CHOICES[(position + 1) % len(OVERVIEW_ROTATION_CHOICES)]
         )
+
+    def adjust_column_bias(self, delta: float) -> None:
+        spec = self._current_spec()
+        if spec is None:
+            return
+        xs, _ = layouts.internal_dividers(spec.layout_id)
+        if not xs:
+            return
+        base = spec.column_bias if spec.column_bias is not None else 0.0
+        self._set_current_spec(replace(spec, column_bias=normalize_optional_bias(base + delta)))
+
+    def reset_column_bias(self) -> None:
+        spec = self._current_spec()
+        if spec is None or spec.column_bias is None:
+            return
+        self._set_current_spec(replace(spec, column_bias=None))
+
+    def adjust_row_bias(self, delta: float) -> None:
+        spec = self._current_spec()
+        if spec is None:
+            return
+        _, ys = layouts.internal_dividers(spec.layout_id)
+        if not ys:
+            return
+        base = spec.row_bias if spec.row_bias is not None else 0.0
+        self._set_current_spec(replace(spec, row_bias=normalize_optional_bias(base + delta)))
+
+    def reset_row_bias(self) -> None:
+        spec = self._current_spec()
+        if spec is None or spec.row_bias is None:
+            return
+        self._set_current_spec(replace(spec, row_bias=None))
 
     def apply_same_as_previous(self) -> None:
         """ひとつ前のページの設定を複製して、次のページへ進む。"""

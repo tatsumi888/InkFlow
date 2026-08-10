@@ -136,3 +136,110 @@ def test_get_layout_unknown_id():
 def test_layout_ids_are_unique():
     ids = layouts.layout_ids()
     assert len(ids) == len(set(ids)) == len(layouts.LAYOUTS)
+
+
+# ---- 分割線の抽出とオフセット適用 ----------------------------------------
+
+
+def test_internal_dividers_quad_2col():
+    xs, ys = layouts.internal_dividers("quad_2col")
+    assert xs == (0.5,)
+    assert ys == (0.5,)
+
+
+def test_internal_dividers_six_2col():
+    xs, ys = layouts.internal_dividers("six_2col")
+    assert xs == (0.5,)
+    assert ys == pytest.approx((layouts._1_3, layouts._2_3))
+
+
+def test_internal_dividers_full_layout_has_none():
+    xs, ys = layouts.internal_dividers("full")
+    assert xs == ()
+    assert ys == ()
+
+
+def test_internal_dividers_half_v_only_y():
+    xs, ys = layouts.internal_dividers("half_v")
+    assert xs == ()
+    assert ys == (0.5,)
+
+
+def test_internal_dividers_half_h_only_x():
+    xs, ys = layouts.internal_dividers("half_h")
+    assert xs == (0.5,)
+    assert ys == ()
+
+
+@pytest.mark.parametrize("layout", layouts.LAYOUTS, ids=lambda l: l.id)
+def test_internal_dividers_are_strictly_inside_the_page(layout):
+    xs, ys = layouts.internal_dividers(layout.id)
+    for v in xs + ys:
+        assert 0.0 < v < 1.0
+
+
+def test_apply_divider_offsets_without_offsets_returns_original_rects():
+    assert layouts.apply_divider_offsets("quad_2col") == layouts.get_layout("quad_2col").rects
+
+
+def test_apply_divider_offsets_shifts_the_x_divider():
+    rects = layouts.apply_divider_offsets("quad_2col", x_offsets={0.5: 0.05})
+    xs = sorted({x0 for x0, _, _, _ in rects} | {x1 for _, _, x1, _ in rects})
+    assert xs == pytest.approx([0.0, 0.55, 1.0])
+
+
+def test_apply_divider_offsets_shifts_the_y_divider():
+    rects = layouts.apply_divider_offsets("quad_2col", y_offsets={0.5: -0.08})
+    ys = sorted({y0 for _, y0, _, _ in rects} | {y1 for _, _, _, y1 in rects})
+    assert ys == pytest.approx([0.0, 0.42, 1.0])
+
+
+def test_apply_divider_offsets_does_not_move_page_edges():
+    rects = layouts.apply_divider_offsets("quad_2col", x_offsets={0.0: 0.9, 1.0: -0.9})
+    xs = {x0 for x0, _, _, _ in rects} | {x1 for _, _, x1, _ in rects}
+    assert xs == {0.0, 0.5, 1.0}
+
+
+def test_apply_divider_offsets_clamps_within_page():
+    rects = layouts.apply_divider_offsets("quad_2col", x_offsets={0.5: 5.0})
+    assert all(0.0 <= x0 <= 1.0 and 0.0 <= x1 <= 1.0 for x0, _, x1, _ in rects)
+
+
+@pytest.mark.parametrize("layout", layouts.LAYOUTS, ids=lambda l: l.id)
+def test_apply_divider_offsets_preserves_total_area(layout):
+    xs, ys = layouts.internal_dividers(layout.id)
+    x_offsets = {x: 0.03 for x in xs}
+    y_offsets = {y: -0.02 for y in ys}
+    rects = layouts.apply_divider_offsets(layout.id, x_offsets, y_offsets)
+    area = sum((x1 - x0) * (y1 - y0) for x0, y0, x1, y1 in rects)
+    assert area == pytest.approx(1.0)
+
+
+def test_apply_divider_offsets_moves_dividers_shared_by_multiple_rects_together():
+    """六分割の同じ分割線を参照する矩形は、揃って動く（隙間や重なりが出ない）。"""
+    rects = layouts.apply_divider_offsets("six_2col", y_offsets={layouts._1_3: 0.05})
+    # 左列3コマ・右列3コマとも、動かした境界を共有しているはず。
+    boundaries_left = sorted(r[1] for r in rects if r[0] == 0.0) + [rects[2][3]]
+    boundaries_right = sorted(r[1] for r in rects if r[0] == 0.5) + [rects[5][3]]
+    assert boundaries_left == pytest.approx(boundaries_right)
+
+
+def test_reading_rects_applies_offsets_before_overlap():
+    plain = layouts.reading_rects("quad_2col", overlap=0.0)
+    shifted = layouts.reading_rects("quad_2col", overlap=0.0, x_offsets={0.5: 0.1})
+    assert shifted[0][2] == pytest.approx(0.6)  # 左上コマの右端が動いている
+    assert shifted != plain
+
+
+def test_reading_rects_offsets_and_overlap_compose():
+    """オフセットとオーバーラップを両方指定しても、オフセット後の矩形が基準になる。"""
+    shifted_only = layouts.reading_rects("quad_2col", overlap=0.0, y_offsets={0.5: 0.05})
+    with_overlap = layouts.reading_rects("quad_2col", overlap=0.05, y_offsets={0.5: 0.05})
+    # 左上コマ（インデックス0）の下端は、オーバーラップの分だけさらに広がる。
+    assert with_overlap[0][3] > shifted_only[0][3]
+
+
+def test_reading_rects_without_offsets_matches_default_behaviour():
+    assert layouts.reading_rects("quad_2col", overlap=0.03) == layouts.reading_rects(
+        "quad_2col", overlap=0.03, x_offsets=None, y_offsets=None
+    )

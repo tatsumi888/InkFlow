@@ -454,6 +454,159 @@ def test_rotation_on_empty_project_is_safe(qapp):
         win.deleteLater()
 
 
+# ---- 分割位置の微調整（column_bias / row_bias） ------------------------
+
+
+def test_bias_defaults_to_none(window):
+    spec = window._current_spec()
+    assert spec.column_bias is None
+    assert spec.row_bias is None
+
+
+def test_adjust_column_bias_updates_spec(window):
+    window.adjust_column_bias(0.01)
+    assert window._current_spec().column_bias == pytest.approx(0.01)
+    window.adjust_column_bias(0.01)
+    assert window._current_spec().column_bias == pytest.approx(0.02)
+
+
+def test_adjust_row_bias_updates_spec(window):
+    window.adjust_row_bias(-0.01)
+    assert window._current_spec().row_bias == pytest.approx(-0.01)
+
+
+def test_adjust_column_bias_is_clamped(window):
+    for _ in range(50):
+        window.adjust_column_bias(0.01)
+    assert window._current_spec().column_bias == pytest.approx(0.2)
+
+
+def test_reset_column_bias_returns_to_auto(window):
+    window.adjust_column_bias(0.05)
+    assert window._current_spec().column_bias is not None
+    window.reset_column_bias()
+    assert window._current_spec().column_bias is None
+
+
+def test_reset_row_bias_returns_to_auto(window):
+    window.adjust_row_bias(0.05)
+    window.reset_row_bias()
+    assert window._current_spec().row_bias is None
+
+
+def test_bias_marks_project_dirty(window):
+    assert window._dirty is False
+    window.adjust_column_bias(0.01)
+    assert window._dirty is True
+
+
+def test_bias_controls_disabled_for_full_layout(window):
+    """`full` レイアウトには分割線が無いので、微調整ボタンは無効になる。"""
+    window.select_layout(layouts.layout_ids().index("full"))
+    assert all(not b.isEnabled() for b in window.column_bias_buttons)
+    assert all(not b.isEnabled() for b in window.row_bias_buttons)
+
+
+def test_bias_controls_enabled_for_quad_2col(window):
+    assert window._current_spec().layout_id == "quad_2col"
+    assert all(b.isEnabled() for b in window.column_bias_buttons)
+    assert all(b.isEnabled() for b in window.row_bias_buttons)
+
+
+def test_adjust_bias_ignored_when_axis_has_no_divider(window):
+    """分割線の無い軸（例: half_v の左右）はクリックしても変化しない。"""
+    window.select_layout(layouts.layout_ids().index("half_v"))
+    xs, ys = layouts.internal_dividers("half_v")
+    assert xs == ()  # half_v は上下のみ分割
+    window.adjust_column_bias(0.01)
+    assert window._current_spec().column_bias is None
+
+
+def test_column_bias_label_shows_manual_value(window):
+    window.adjust_column_bias(0.04)
+    assert "手動" in window.column_bias_label.text()
+    assert "+4.0%" in window.column_bias_label.text()
+
+
+def test_column_bias_label_shows_auto_when_unset(window):
+    assert "自動" in window.column_bias_label.text()
+
+
+def test_layout_change_keeps_bias(window):
+    window.adjust_column_bias(0.03)
+    window.select_layout(layouts.layout_ids().index("six_2col"))
+    assert window._current_spec().column_bias == pytest.approx(0.03)
+
+
+def test_overview_toggle_keeps_bias(window):
+    window.adjust_row_bias(0.02)
+    window.toggle_overview()
+    assert window._current_spec().row_bias == pytest.approx(0.02)
+
+
+def test_apply_to_article_spreads_bias(window):
+    window.adjust_column_bias(0.05)
+    window.apply_to_article()
+    assert all(page.column_bias == pytest.approx(0.05) for page in window.project.articles[0].pages)
+    assert all(page.column_bias is None for page in window.project.articles[1].pages)
+
+
+def test_apply_to_all_spreads_bias(window):
+    window.adjust_row_bias(-0.03)
+    window.apply_to_all()
+    assert all(
+        page.row_bias == pytest.approx(-0.03)
+        for article in window.project.articles
+        for page in article.pages
+    )
+
+
+def test_apply_same_as_previous_copies_bias(window):
+    window.adjust_column_bias(0.02)
+    window.next_page()
+    window.apply_same_as_previous()
+    article_index, page_index = window._flat[1]
+    assert window.project.articles[article_index].pages[page_index].column_bias == pytest.approx(
+        0.02
+    )
+
+
+def test_bias_survives_save_and_load(window, tmp_path):
+    window.adjust_column_bias(0.06)
+    window.adjust_row_bias(-0.02)
+    path = tmp_path / "book.inkflow.json"
+    window.project.save(path)
+
+    reloaded = Project.load(path)
+    spec = reloaded.articles[0].pages[0]
+    assert spec.column_bias == pytest.approx(0.06)
+    assert spec.row_bias == pytest.approx(-0.02)
+
+
+def test_bias_on_empty_project_is_safe(qapp):
+    win = MainWindow(Project())
+    try:
+        win.adjust_column_bias(0.01)
+        win.reset_column_bias()
+        win.adjust_row_bias(0.01)
+        win.reset_row_bias()
+    finally:
+        win.preview_cache.close()
+        win.deleteLater()
+
+
+def test_preview_reflects_manual_bias(window):
+    """手動バイアスを設定すると、プレビューに描かれる分割枠も実際に動く。"""
+    plain_rects = window.page_view._overlay.part_rects
+
+    window.adjust_column_bias(0.1)
+    biased_rects = window.page_view._overlay.part_rects
+
+    assert biased_rects != plain_rects
+    # 左段（左上コマ）の右端が、バイアス分だけ右に動いているはず。
+    assert biased_rects[0][2] > plain_rects[0][2]
+
+
 def test_apply_same_as_previous_copies_and_advances(window):
     window.select_layout(layouts.layout_ids().index("six_2col"))
     window.next_page()
