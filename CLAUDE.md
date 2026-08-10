@@ -133,6 +133,19 @@ action = file_menu.actions()[0]
 - **offscreen プラットフォームではフォントが1つも読まれず、全文字が豆腐（□）になる。** UI を画像に描いて確認したいときは `QT_QPA_PLATFORM` を外し、`show()` せずに `widget.render(QPixmap(...))` する（ウィンドウは出ない）。豆腐を日本語表示の不具合と誤診しないこと。
 - 重い統合テストは `custom:150x200` の小さな端末プロファイルを使って高速化している。実解像度が必要なテストだけ `paperwhite_11` を使う。
 
+## ドキュメント
+
+`docs/` に永続ドキュメント一式がある。`docs/development-guidelines.md` の検証コマンドが他のガイドより優先する。
+
+| ファイル | 内容 |
+|---|---|
+| `docs/product-requirements.md` | プロダクト要求定義書 |
+| `docs/functional-design.md` | 機能設計書（画面遷移・データ構造・アルゴリズム） |
+| `docs/architecture.md` | アーキテクチャ設計書（レイヤ構成・依存関係） |
+| `docs/repository-structure.md` | リポジトリ構造定義書 |
+| `docs/development-guidelines.md` | 開発ガイドライン |
+| `docs/glossary.md` | 用語集 |
+
 ## 作業の進め方
 
 - 作業単位のステアリングは `.steering/[YYYYMMDD]-[NN]-[機能名]/`。`tasklist.md` が進捗の正で、`[ ]` → `[x]` は1タスクずつ即時更新する。

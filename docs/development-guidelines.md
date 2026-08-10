@@ -19,7 +19,7 @@
 
 - Windows 11 / Python 3.12 / PowerShell 5.1（`&&` は使えない。`;` と `if ($?)` で繋ぐ）
 - 仮想環境は `.venv\`。Anaconda は使わない（`venv` + `pip` のみ）
-- **このディレクトリは Git リポジトリではない**。バージョン管理を前提とした操作をしない
+- このディレクトリは Git リポジトリで、リモート（`origin` = `github.com/tatsumi888/InkFlow`）を持つ
 
 ## 3. コーディング規約
 

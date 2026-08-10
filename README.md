@@ -208,7 +208,14 @@ git push origin v1.0.0
 
 GUIテストは `tests/conftest.py` が `QT_QPA_PLATFORM=offscreen` を設定するのでヘッドレスで走る。テスト用のPDFは PyMuPDF で合成しているため、実物の雑誌PDFは不要。
 
-詳細は [CLAUDE.md](CLAUDE.md) と `docs/` を参照。
+詳細は [CLAUDE.md](CLAUDE.md) と以下のドキュメントを参照。
+
+- [docs/product-requirements.md](docs/product-requirements.md) — プロダクト要求定義書
+- [docs/functional-design.md](docs/functional-design.md) — 機能設計書（画面遷移・データ構造・アルゴリズム）
+- [docs/architecture.md](docs/architecture.md) — アーキテクチャ設計書（レイヤ構成・依存関係）
+- [docs/repository-structure.md](docs/repository-structure.md) — リポジトリ構造定義書
+- [docs/development-guidelines.md](docs/development-guidelines.md) — 開発ガイドライン（検証コマンドの正典）
+- [docs/glossary.md](docs/glossary.md) — 用語集
 
 ## スコープ外
 
