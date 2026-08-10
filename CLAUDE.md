@@ -57,6 +57,7 @@ UI 層          inkflow/gui/          inkflow/cli.py
 | `composer.py` | `Project` → 出力ページ列（ジェネレータ） |
 | `epub_writer.py` | 固定レイアウトEPUB（zipfile で直接組み立て） |
 | `builder.py` | composer と epub_writer を繋ぐ。**CLI と GUI の共通経路** |
+| `buildinfo.py` | バージョン・ビルド日時・ソースコミットの表示文言（`--version` / `selftest` / GUIの「バージョン情報」） |
 
 CLI と GUI が同じ出力になるのは `builder.build_epub()` を共有しているため。ここを迂回する経路を新設しないこと（`tests/test_cli.py::test_cli_and_gui_paths_produce_identical_pages` が守っている）。
 

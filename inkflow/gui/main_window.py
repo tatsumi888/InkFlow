@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import APP_NAME, builder, composer, layouts, renderer
+from .. import APP_NAME, builder, buildinfo, composer, layouts, renderer
 from ..errors import InkFlowError
 from ..models import (
     PROJECT_SUFFIX,
@@ -302,6 +302,7 @@ class MainWindow(QMainWindow):
 
         help_menu = self.menuBar().addMenu("ヘルプ(&H)")
         self._add_action(help_menu, "キー操作…", self.show_shortcut_help, "F1")
+        self._add_action(help_menu, "バージョン情報…", self.show_about)
 
     def _build_shortcuts(self) -> None:
         """メニューに載せないキー（数字キーなど）。"""
@@ -910,6 +911,9 @@ class MainWindow(QMainWindow):
 
     def show_shortcut_help(self) -> None:
         QMessageBox.information(self, "キー操作", SHORTCUT_HELP)
+
+    def show_about(self) -> None:
+        QMessageBox.information(self, "バージョン情報", buildinfo.describe())
 
     def _confirm_discard_changes(self) -> bool:
         if not self._dirty:

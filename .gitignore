@@ -10,3 +10,4 @@ dist/
 out/
 *.epub
 *.inkflow.json
+inkflow/_generated_build_info.py

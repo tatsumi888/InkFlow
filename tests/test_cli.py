@@ -339,6 +339,49 @@ def test_no_command_exits_with_usage_error():
         cli.main([])
 
 
+# ---- バージョン情報 -----------------------------------------------------
+
+
+def test_version_flag_prints_build_info(capsys, monkeypatch):
+    from inkflow import buildinfo
+
+    monkeypatch.setattr(buildinfo, "FROZEN", False)
+    monkeypatch.setattr(buildinfo, "_run_git", lambda args: None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--version"])
+    assert excinfo.value.code == 0
+
+    out = capsys.readouterr().out
+    assert "InkFlow" in out
+    assert "ソース:" in out
+    assert "ビルド:" in out
+
+
+def test_version_flag_reflects_source_commit(capsys, monkeypatch):
+    from inkflow import buildinfo
+
+    monkeypatch.setattr(buildinfo, "FROZEN", False)
+    monkeypatch.setattr(buildinfo, "_run_git", lambda args: "abc1234")
+
+    with pytest.raises(SystemExit):
+        cli.main(["--version"])
+    assert "abc1234" in capsys.readouterr().out
+
+
+def test_selftest_header_includes_build_info(capsys, monkeypatch):
+    from inkflow import buildinfo
+
+    monkeypatch.setattr(buildinfo, "FROZEN", False)
+    monkeypatch.setattr(buildinfo, "_run_git", lambda args: None)
+
+    cli.main(["selftest"])
+    out = capsys.readouterr().out
+    assert "InkFlow" in out
+    assert "ビルド: ソース実行" in out
+    assert "自己診断" in out
+
+
 def test_cli_and_gui_paths_produce_identical_pages(tmp_path, folder_with_pdfs):
     """CLI と GUI（BuildWorker）は同じ builder を通るので、中身が一致する。"""
     from inkflow.gui.worker import BuildWorker

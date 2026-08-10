@@ -11,7 +11,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import APP_NAME, __version__, builder, composer, devices, layouts
+from . import builder, buildinfo, composer, devices, layouts
 from .errors import InkFlowError
 from .models import (
     ROTATION_CCW,
@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="inkflow",
         description="雑誌記事PDFをKindle向けに再ページ化して固定レイアウトEPUBを作る。",
     )
-    parser.add_argument("--version", action="version", version=f"InkFlow {__version__}")
+    parser.add_argument("--version", action="version", version=buildinfo.describe())
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     build_cmd = subparsers.add_parser(
@@ -219,7 +219,8 @@ def _command_selftest(_: argparse.Namespace) -> int:
     実行ファイルに固めたあと、依存の取りこぼしがないかを確認するための入口。
     PDFの読み込み・画像処理・EPUB書き出し・Qtの初期化まで実際に通す。
     """
-    print(f"{APP_NAME} {__version__} 自己診断")
+    print(buildinfo.describe())
+    print("自己診断")
     failures: list[str] = []
 
     _check(failures, "PDF読み込み → EPUB生成", _selftest_pipeline)

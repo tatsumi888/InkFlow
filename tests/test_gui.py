@@ -761,6 +761,38 @@ def test_new_project_from_empty_window_is_safe(qapp, monkeypatch):
         win.deleteLater()
 
 
+# ---- バージョン情報 -----------------------------------------------------
+
+
+def test_about_menu_action_exists(window):
+    menu_bar = window.menuBar()
+    top_actions = menu_bar.actions()
+    help_action = top_actions[-1]
+    help_menu = help_action.menu()
+    help_menu_actions = help_menu.actions()
+    assert any("バージョン情報" in a.text() for a in help_menu_actions)
+
+
+def test_show_about_displays_build_info(window, monkeypatch):
+    from inkflow import buildinfo
+
+    monkeypatch.setattr(buildinfo, "FROZEN", False)
+    monkeypatch.setattr(buildinfo, "_run_git", lambda args: None)
+
+    captured = {}
+
+    def fake_information(parent, title, text):
+        captured["title"] = title
+        captured["text"] = text
+
+    monkeypatch.setattr("inkflow.gui.main_window.QMessageBox.information", fake_information)
+    window.show_about()
+
+    assert captured["title"] == "バージョン情報"
+    assert "InkFlow" in captured["text"]
+    assert "ビルド: ソース実行" in captured["text"]
+
+
 # ---- 設定ダイアログ ---------------------------------------------------
 
 

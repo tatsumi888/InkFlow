@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -214,6 +215,79 @@ def generate_icon() -> Path | None:
         return None
 
 
+def git_commit_hash() -> str | None:
+    """現在の短縮コミットハッシュ。取得できなければ None（ビルドは止めない）。"""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(ROOT),
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def git_is_dirty() -> bool | None:
+    """作業ツリーに未コミットの変更があるか。取得できなければ None。"""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(ROOT),
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return bool(result.stdout.strip())
+
+
+BUILD_INFO_PATH = ROOT / "inkflow" / "_generated_build_info.py"
+
+
+def write_build_info() -> Path | None:
+    """ビルド時刻とソースのコミット情報を ``inkflow/`` 配下に書き出す。
+
+    ``inkflow/`` 内に置くのは、PyInstaller がインポートを静的解析して自動的に
+    同梱してくれるようにするため（spec の datas にパスを足す必要がない）。
+    gitignore 対象で、PyInstaller 実行後に削除する（残すと、ビルド直後に
+    ソース実行したときパッケージ版のビルド情報を誤って表示しかねないため）。
+
+    失敗してもビルドは止めない（アイコン生成と同じ扱い。診断用の付加情報のため）。
+    """
+    try:
+        commit = git_commit_hash()
+        dirty = git_is_dirty()
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        content = (
+            '"""自動生成ファイル。packaging/build.py がビルド時に書き出す。'
+            'ビルド後に削除される。編集しない。"""\n\n'
+            f"BUILD_TIME = {stamp!r}\n"
+            f"BUILD_COMMIT = {commit!r}\n"
+            f"BUILD_DIRTY = {dirty!r}\n"
+        )
+        BUILD_INFO_PATH.write_text(content, encoding="utf-8")
+        return BUILD_INFO_PATH
+    except OSError as e:
+        print(f"警告: ビルド情報を書き出せませんでした（省略して続行）: {e}", file=sys.stderr)
+        return None
+
+
+def remove_build_info() -> None:
+    """PyInstaller 実行後に生成ファイルを取り除く（成功・失敗どちらでも呼ぶ）。"""
+    try:
+        BUILD_INFO_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def write_version_files() -> tuple[Path, Path]:
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     gui_path = BUILD_DIR / "version_gui.txt"
@@ -254,13 +328,19 @@ def run_pyinstaller(onefile: bool, icon: Path | None, versions: tuple[Path, Path
         str(SPEC_PATH),
     ]
     print(f"$ {' '.join(command)}\n")
-    result = subprocess.run(
-        command,
-        cwd=str(ROOT),
-        env=spec_environment(onefile, icon, versions),
-        timeout=PYINSTALLER_TIMEOUT,
-        check=False,
-    )
+    write_build_info()
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            env=spec_environment(onefile, icon, versions),
+            timeout=PYINSTALLER_TIMEOUT,
+            check=False,
+        )
+    finally:
+        # PyInstaller はこの時点で実行ファイルへ内容をコピー済みなので、
+        # ソースツリーには残さない（ビルド直後のソース実行との混同を防ぐ）。
+        remove_build_info()
     if result.returncode != 0:
         raise SystemExit(f"PyInstaller が失敗しました（終了コード {result.returncode}）")
 
