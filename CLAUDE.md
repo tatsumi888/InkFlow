@@ -22,6 +22,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 .venv\Scripts\python.exe -m pytest -q                          # 全テスト
 .venv\Scripts\python.exe -m pytest tests/test_composer.py -q   # 単一ファイル
 .venv\Scripts\python.exe -m pytest -k "overlap" -q             # 名前で絞る
+
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt   # ビルド用（PyInstaller）
+.venv\Scripts\python.exe packaging\build.py                       # 配布物（onedir・既定）
+.venv\Scripts\python.exe packaging\build.py --onefile             # 配布物（onefile）
+.venv\Scripts\python.exe -m inkflow.cli selftest                  # この環境で動くかの自己診断
 ```
 
 `pytest.ini` が `pythonpath = .` を前提にしているので、必ずリポジトリルートで実行する。lint / 型チェックのスクリプトは設けていない。**検証コマンドは `pytest` のみ**。
@@ -90,6 +95,16 @@ EPUB の要件。`epub_writer.write_epub()` の最初の `writestr` を動かさ
 ### 6. PyMuPDF は `import pymupdf`
 
 `import fitz` は非推奨警告が出る。
+
+### 6-2. パッケージングで踏んだ落とし穴
+
+`packaging/` に閉じている（本体は PyInstaller を知らない）が、次は実際に踏んだもの。
+
+- **`packaging/entry.py` で「同名のパスが存在するか」を見てはいけない。** CLI/GUI の振り分けを `Path(argv[1]).exists()` で判定すると、カレントに PyInstaller の作業用 `build/` があるだけで `InkFlow-cli.exe build ...` が GUI 起動に化ける。パス区切りの有無で判定する。
+- **CLI用/GUI用の実行ファイルは実行ファイル名でも振り分ける。** 引数だけで決めると `InkFlow-cli.exe` を引数なしで起動したときに GUI が立ち上がる。
+- **凍結した実行ファイルは `PYTHONIOENCODING` を無視する。** 日本語Windowsのコンソールは cp932 なので、表現できない文字（em dash など）を print すると落ちる。`cli._make_output_robust()` が `errors=backslashreplace` に再設定している。子プロセスの出力を読む側も cp932 で復号する必要がある。
+- **`packaging/` に `__init__.py` を置かない。** PyPI の `packaging`（PyInstaller の依存）と衝突する。
+- **spec の除外リストは必ず実起動で検証する。** 未使用 Qt DLL を落としてサイズを 170MB → 124MB にしているが、落としすぎは起動するまで分からない。`build.py` の動作確認が `selftest` を走らせるのはこのため。
 
 ### 7. GUI に入力ウィジェットを置かない
 

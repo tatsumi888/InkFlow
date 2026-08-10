@@ -182,6 +182,24 @@ InkFlowError
 
 実測（B5・原稿40ページ・1236×1648）: 出力201ページ、32.2MB、44秒。
 
+## 8-2. パッケージング
+
+配布物の作り方は**アプリ本体の外側**（`packaging/`）に閉じる。`inkflow/` は PyInstaller の存在を知らない。唯一の例外がアイコンで、GUI のウィンドウアイコンとしても使うため `inkflow/appicon.py` に置く。
+
+```
+packaging/
+  build.py        ビルドの入口（アイコン・バージョンリソース生成 → PyInstaller → 動作確認 → ZIP）
+  entry.py        実行ファイルの入口（GUI/CLI の振り分け）
+  inkflow.spec    PyInstaller の仕様
+```
+
+- **`Analysis` は1つ、`EXE` は2つ。** GUI（コンソールなし）と CLI（コンソールあり）は同じ `entry.py` から起動するので、解析もライブラリも共有できる。onedir では `COLLECT` が1フォルダにまとめる。
+- **振り分けは実行ファイル名と第1引数で行う。** 「同名のパスが存在するか」で判定してはいけない（カレントの `build/` で GUI 起動に化ける）。
+- **未使用の Qt DLL などを spec で除外**してサイズを 170MB → 124MB にしている。落としすぎは起動するまで分からないので、`build.py` の動作確認が `cli selftest`（PDF読み込み → 画像処理 → EPUB書き出し → Qt初期化 → アイコン生成）を実際に走らせて検証する。
+- 実測（B5・原稿1ページ）: onedir 起動 0.46秒／フォルダ124MB・ZIP 55MB、onefile 起動 2.43秒／各51MB。onefile は起動のたびに展開するため既定は onedir。
+
+`packaging/` に `__init__.py` は置かない。PyPI の `packaging`（PyInstaller の依存）と衝突するため。
+
 ## 9. 依存ライブラリ
 
 ```

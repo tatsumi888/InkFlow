@@ -5,12 +5,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from PySide6.QtGui import QIcon, QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from .. import APP_NAME, __version__, builder, composer
+from .. import APP_NAME, __version__, appicon, builder, composer
 from ..errors import InkFlowError
 from ..models import Project
 from .main_window import MainWindow
+
+ICON_SIZE = 256
 
 
 def _initial_project(argv: list[str]) -> tuple[Project | None, str | None]:
@@ -45,12 +48,38 @@ def _initial_project(argv: list[str]) -> tuple[Project | None, str | None]:
     return (None, None)
 
 
+def application_icon() -> QIcon | None:
+    """アプリアイコンを QIcon にする。
+
+    アイコンは装飾なので、生成や変換に失敗しても起動は続ける。パッケージ版でも
+    ソース実行でも同じ図柄になるよう、実行ファイルに埋めたものではなく
+    `appicon` から描き起こす。
+    """
+    try:
+        image = appicon.render_icon(ICON_SIZE).convert("RGBA")
+        qimage = QImage(
+            image.tobytes("raw", "RGBA"),
+            image.width,
+            image.height,
+            image.width * 4,
+            QImage.Format.Format_RGBA8888,
+        )
+        # QImage は渡したバッファを参照するだけなので、コピーして寿命を切り離す。
+        return QIcon(QPixmap.fromImage(qimage.copy()))
+    except Exception:  # noqa: BLE001 - アイコンのために起動を失敗させない
+        return None
+
+
 def run(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(__version__)
+
+    icon = application_icon()
+    if icon is not None:
+        app.setWindowIcon(icon)
 
     project, error = _initial_project(arguments)
     window = MainWindow(project)

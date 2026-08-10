@@ -651,6 +651,38 @@ def test_initial_project_without_arguments(qapp):
     assert _initial_project([]) == (None, None)
 
 
+# ---- アプリアイコン ---------------------------------------------------
+
+
+def test_application_icon_is_available(qapp):
+    from inkflow.gui.app import application_icon
+
+    icon = application_icon()
+    assert icon is not None
+    assert icon.isNull() is False
+
+
+def test_application_icon_matches_the_generated_artwork(qapp):
+    """パッケージ版とソース実行で同じ図柄になること。"""
+    from inkflow import appicon
+    from inkflow.gui.app import ICON_SIZE, application_icon
+
+    icon = application_icon()
+    pixmap = icon.pixmap(ICON_SIZE, ICON_SIZE)
+    assert (pixmap.width(), pixmap.height()) == (ICON_SIZE, ICON_SIZE)
+    assert appicon.render_icon(ICON_SIZE).size == (ICON_SIZE, ICON_SIZE)
+
+
+def test_application_icon_survives_generation_failure(qapp, monkeypatch):
+    def boom(_size):
+        raise RuntimeError("描画に失敗")
+
+    monkeypatch.setattr("inkflow.gui.app.appicon.render_icon", boom)
+    from inkflow.gui.app import application_icon
+
+    assert application_icon() is None
+
+
 def test_initial_project_from_folder(qapp, article_pdfs):
     from inkflow.gui.app import _initial_project
 

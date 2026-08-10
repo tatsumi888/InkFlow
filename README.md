@@ -141,6 +141,34 @@ Send to Kindle のメール添付は50MBまで。超えるときは**階調数�
 
 生成時間は原稿1ページあたり約1.1秒（40ページで45秒程度）。
 
+## 配布用の実行ファイルを作る
+
+Python が入っていない Windows PC でも動く形に固められる。
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt   # 初回のみ
+.venv\Scripts\python.exe packaging\build.py                       # 1フォルダ（既定）
+.venv\Scripts\python.exe packaging\build.py --onefile             # 1ファイル
+```
+
+生成物は `dist/` に出る。GUI用（コンソールなし）と CLI用（コンソールあり）の2つを作る。
+
+| 形式 | 生成物 | サイズ | 起動時間 |
+|---|---|---|---|
+| **onedir（既定）** | `dist/InkFlow/` ＋ 配布用ZIP | フォルダ 124MB / ZIP **55MB** | **0.46 秒** |
+| onefile | `dist/InkFlow.exe`, `dist/InkFlow-cli.exe` | 各 51MB | 2.43 秒 |
+
+onefile は起動のたびに一時ディレクトリへ全体を展開するため**5倍以上遅い**。コピーの手軽さより起動の速さを取って、既定は onedir にしている。
+
+ビルドの最後に生成物を実際に起動し、`selftest`（PDF読み込み → 画像処理 → EPUB書き出し → Qt初期化）が通ることを確認する。パッケージングで最も起きやすい「隠れた依存の取りこぼし」は、起動してみるまで分からないため。
+
+### 配布したあと
+
+- ZIP を展開したフォルダをそのままコピーすれば動く。インストール不要。
+- **GUI は `InkFlow.exe`、CLI は `InkFlow-cli.exe`。** CLI 版は必ずサブコマンド付きで呼ぶ（引数なしだと使い方が出る）。
+- 配布先で正しく動くかは `InkFlow-cli.exe selftest` で確認できる。
+- 署名していないため、初回起動時に Windows SmartScreen が警告を出す。「詳細情報」→「実行」で起動できる。
+
 ## 開発
 
 ```powershell

@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
-from . import __version__, builder, composer, devices, layouts
+from . import APP_NAME, __version__, builder, composer, devices, layouts
 from .errors import InkFlowError
 from .models import (
     ROTATION_CCW,
@@ -73,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     devices_cmd = subparsers.add_parser("devices", help="利用できる端末プリセットを一覧する")
     devices_cmd.set_defaults(handler=_command_devices)
+
+    selftest_cmd = subparsers.add_parser(
+        "selftest",
+        help="この環境で正しく動くか自己診断する（配布した実行ファイルの確認用）",
+    )
+    selftest_cmd.set_defaults(handler=_command_selftest)
 
     return parser
 
@@ -197,6 +204,104 @@ def _command_devices(_: argparse.Namespace) -> int:
     return 0
 
 
+def _command_selftest(_: argparse.Namespace) -> int:
+    """この環境で一通り動くかを確かめる。
+
+    実行ファイルに固めたあと、依存の取りこぼしがないかを確認するための入口。
+    PDFの読み込み・画像処理・EPUB書き出し・Qtの初期化まで実際に通す。
+    """
+    print(f"{APP_NAME} {__version__} 自己診断")
+    failures: list[str] = []
+
+    _check(failures, "PDF読み込み → EPUB生成", _selftest_pipeline)
+    _check(failures, "GUI（Qt）の初期化", _selftest_qt)
+
+    if failures:
+        print("\n診断結果: 失敗", file=sys.stderr)
+        for failure in failures:
+            print(f"  - {failure}", file=sys.stderr)
+        return 1
+    print("\n診断結果: すべて正常")
+    return 0
+
+
+def _check(failures: list[str], label: str, action: Callable[[], str]) -> bool:
+    try:
+        detail = action()
+    except Exception as e:  # noqa: BLE001 - 自己診断なので何が起きても報告する
+        print(f"  [NG] {label}: {e}")
+        failures.append(f"{label}: {e}")
+        return False
+    print(f"  [OK] {label}{f' : {detail}' if detail else ''}")
+    return True
+
+
+def _selftest_pipeline() -> str:
+    """合成PDFから EPUB を1冊作って、枚数が想定どおりか確かめる。"""
+    import tempfile
+
+    import pymupdf
+
+    from . import builder
+
+    with tempfile.TemporaryDirectory(prefix="inkflow-selftest-") as workdir:
+        directory = Path(workdir)
+        pdf_path = directory / "selftest.pdf"
+
+        document = pymupdf.open()
+        page = document.new_page(width=515.9, height=728.5)
+        page.insert_textbox(
+            pymupdf.Rect(50, 50, 466, 679),
+            "InkFlow selftest. " * 200,
+            fontsize=10,
+            fontname="helv",
+        )
+        document.save(str(pdf_path))
+        document.close()
+
+        project = builder.project_from_pdfs(
+            [pdf_path], title="自己診断", device_id="custom:150x200"
+        )
+        summary = builder.build_epub(project, directory / "selftest.epub")
+
+    expected = 6  # 原稿1ページ x 5枚 + 表紙
+    if summary.page_count != expected:
+        raise RuntimeError(f"出力ページ数が想定と違います（{summary.page_count} != {expected}）")
+    return f"{summary.page_count}ページ / {summary.size_mb:.2f} MB"
+
+
+def _selftest_qt() -> str:
+    """QApplication とメインウィンドウを実際に組み立てる。
+
+    ウィンドウは表示しない。Qt のプラットフォームプラグインと必要なDLLが
+    揃っているかを確かめるのが目的。
+    """
+    from PySide6.QtCore import qVersion
+    from PySide6.QtWidgets import QApplication
+
+    from .gui.app import application_icon
+    from .gui.main_window import MainWindow
+    from .models import Project
+
+    app = QApplication.instance() or QApplication([])
+
+    # GUI 起動時と同じ経路でアイコンを作る。凍結後に Pillow → QImage の変換が
+    # 壊れていないかは、ここを通さないと分からない（起動側は失敗を握りつぶすため）。
+    icon = application_icon()
+    if icon is None or icon.isNull():
+        raise RuntimeError("アプリアイコンを生成できませんでした")
+    app.setWindowIcon(icon)
+
+    window = MainWindow(Project())
+    try:
+        window.ensurePolished()
+    finally:
+        window.preview_cache.close()
+        window.deleteLater()
+        app.processEvents()
+    return f"Qt {qVersion()}"
+
+
 # ---- 補助 ---------------------------------------------------------------
 
 
@@ -305,7 +410,26 @@ class _ProgressReporter:
             sys.stderr.flush()
 
 
+def _make_output_robust() -> None:
+    """コンソールのコードページで表せない文字が混じっても落ちないようにする。
+
+    日本語Windowsのコンソールは cp932 で、一部の記号（em dash など）を表現できない。
+    さらに **PyInstaller で固めた実行ファイルは `PYTHONIOENCODING` を無視する**ため、
+    環境変数では対処できない。出力の一文字のために処理全体が落ちるのは割に合わない
+    ので、表せない文字はエスケープして出す。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):  # 既にデタッチされている場合など
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _make_output_robust()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
