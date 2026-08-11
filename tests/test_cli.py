@@ -454,7 +454,7 @@ def test_column_bias_changes_output(tmp_path, folder_with_pdfs):
 def test_bias_overrides_project_file(tmp_path, folder_with_pdfs):
     project_path = tmp_path / "book.inkflow.json"
     cli.main(["init", str(folder_with_pdfs), "-o", str(project_path), "--device", TEST_DEVICE])
-    assert Project.load(project_path).defaults.column_bias is None
+    assert Project.load(project_path).defaults.column_bias == 0.0
 
     plain = tmp_path / "plain.epub"
     overridden = tmp_path / "overridden.epub"

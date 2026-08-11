@@ -42,7 +42,7 @@ Project
  ├ cover_image              任意指定の表紙画像（未指定なら自動生成）
  ├ defaults: PageDefaults   新規ページの既定値 ＋ 分割の共通パラメータ
  │   ├ layout_id / include_overview / rotate
- │   ├ column_bias / row_bias  分割線の手動オフセット一括設定。None なら自動検出
+ │   ├ column_bias / row_bias  分割線のオフセット一括設定。既定0.0（既定位置固定）。None なら自動検出
  │   ├ overlap              コマ間の重なり（矩形自身のサイズ比）
  │   └ auto_trim / trim_threshold
  ├ image: ImageOptions      format / jpeg_quality / gray_levels / gamma /
@@ -55,7 +55,7 @@ Project
          ├ include_overview
          ├ rotate           分割コマの縦横入替（0 / 90=右 / 270=左、時計回り）
          ├ rotate_overview  俯瞰の縦横入替。None なら分割コマと同じ
-         └ column_bias / row_bias  分割線の手動オフセット（±0.2）。None なら自動検出
+         └ column_bias / row_bias  分割線のオフセット（±0.2）。既定0.0（既定位置固定）。None なら自動検出
 ```
 
 永続化は JSON（`*.inkflow.json`）。PDFパスは**プロジェクトファイルからの相対パス**で保存し、読み込み時に絶対化する。プロジェクトごと別ディレクトリへ移しても壊れない。未知のキーは無視し、欠けたキーは既定値で補う。
@@ -80,7 +80,7 @@ Project
 
 同じく「縦横入替」もレイアウトではなく `PageSpec.rotate` が持つ。横長のコマ（`half_v` / `third_v`）では回すと文字が1.33倍になるが、縦長のコマ（`quad_2col`）では0.75倍に悪化する。誌面依存なので自動判定はせず、ページ単位の人手選択とする。
 
-分割線の位置自体も固定ではない。`layouts.internal_dividers()` が rects から内部分割線（0/1を除く境界値）を逆算し、`composer.resolve_divider_offsets()` が本文の余白帯を自動検出してその位置へ寄せる（見つからなければ既定位置のまま）。`PageSpec.column_bias`/`row_bias` を指定すればその軸は自動検出せず手動値をそのまま使う。詳細は `docs/functional-design.md` の「分割線の自動検出・手動微調整」を参照。
+分割線の位置は既定では固定（レイアウト定義どおり、オフセット無し）だが、ページ単位で自動検出や手動値に切り替えられる。`layouts.internal_dividers()` が rects から内部分割線（0/1を除く境界値）を逆算し、`composer.resolve_divider_offsets()` が `PageSpec.column_bias`/`row_bias` の値（既定 `0.0`）をそのまま適用する。`None`（GUIで明示的に自動を選んだ場合のみ）のときだけ本文の余白帯を自動検出してその位置へ寄せる（見つからなければ既定位置のまま）。自動検出は既定で無効: 版面によっては過大な補正をしてしまうため、オプトイン方式にしてある。詳細は `docs/functional-design.md` の「分割線の位置調整」を参照。
 
 縦組み（右→左）は、矩形の並び順が違うレイアウトを追加し、spine の `page-progression-direction` を `rtl` に切り替えるだけで対応できる設計にしてある。
 

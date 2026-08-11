@@ -226,8 +226,19 @@ def test_page_defaults_overview_rotation_round_trip(tmp_path):
 # ---- 分割線の手動微調整（ノド位置） ---------------------------------------
 
 
-def test_page_spec_bias_defaults_to_automatic():
+def test_page_spec_bias_defaults_to_fixed_default_position():
+    """既定は自動検出ではなく、既定位置に固定（オフセット0.0）。
+
+    自動検出が過大な補正をしてしまう頻度が無視できなかったため、既定では無効に
+    してあり、GUIの［自動］ボタンで明示的に column_bias=None（自動）へ切り替える。
+    """
     spec = PageSpec()
+    assert spec.column_bias == 0.0
+    assert spec.row_bias == 0.0
+
+
+def test_page_spec_bias_can_be_set_to_automatic_explicitly():
+    spec = PageSpec(column_bias=None, row_bias=None)
     assert spec.column_bias is None
     assert spec.row_bias is None
 
@@ -259,9 +270,16 @@ def test_page_spec_from_dict_normalizes_bias():
     assert spec.row_bias is None
 
 
-def test_page_spec_without_bias_keys_reads_as_automatic():
-    """微調整の値を持たない旧プロジェクトは、自動検出のまま扱う。"""
+def test_page_spec_without_bias_keys_reads_as_fixed_default_position():
+    """微調整の値を持たない旧プロジェクトは、既定位置固定（この機能追加前と同じ見た目）のまま扱う。"""
     spec = PageSpec.from_dict({"layout": "quad_2col"})
+    assert spec.column_bias == 0.0
+    assert spec.row_bias == 0.0
+
+
+def test_page_spec_with_explicit_null_bias_reads_as_automatic():
+    """明示的に null を書いたプロジェクト（自動検出を選んだ後に保存）は、自動検出のまま扱う。"""
+    spec = PageSpec.from_dict({"layout": "quad_2col", "column_bias": None, "row_bias": None})
     assert spec.column_bias is None
     assert spec.row_bias is None
 
@@ -274,6 +292,24 @@ def test_page_spec_bias_round_trip(tmp_path):
     loaded = Project.load(path)
     assert loaded.articles[0].pages[0].column_bias == pytest.approx(0.04)
     assert loaded.articles[0].pages[0].row_bias == pytest.approx(-0.03)
+
+
+def test_page_defaults_bias_defaults_to_fixed_default_position():
+    defaults = PageDefaults()
+    assert defaults.column_bias == 0.0
+    assert defaults.row_bias == 0.0
+
+
+def test_page_defaults_without_bias_keys_reads_as_fixed_default_position():
+    defaults = PageDefaults.from_dict({"layout": "quad_2col"})
+    assert defaults.column_bias == 0.0
+    assert defaults.row_bias == 0.0
+
+
+def test_page_defaults_with_explicit_null_bias_reads_as_automatic():
+    defaults = PageDefaults.from_dict({"column_bias": None, "row_bias": None})
+    assert defaults.column_bias is None
+    assert defaults.row_bias is None
 
 
 def test_page_defaults_carries_bias_to_new_pages():

@@ -457,10 +457,10 @@ def test_rotation_on_empty_project_is_safe(qapp):
 # ---- 分割位置の微調整（column_bias / row_bias） ------------------------
 
 
-def test_bias_defaults_to_none(window):
+def test_bias_defaults_to_fixed_default_position(window):
     spec = window._current_spec()
-    assert spec.column_bias is None
-    assert spec.row_bias is None
+    assert spec.column_bias == 0.0
+    assert spec.row_bias == 0.0
 
 
 def test_adjust_column_bias_updates_spec(window):
@@ -494,6 +494,29 @@ def test_reset_row_bias_returns_to_auto(window):
     assert window._current_spec().row_bias is None
 
 
+def test_pin_column_bias_to_default_sets_zero(window):
+    """既定ボタンは None（自動）ではなく、明示的な 0.0（既定位置に固定）にする。"""
+    window.adjust_column_bias(0.05)
+    window.pin_column_bias_to_default()
+    assert window._current_spec().column_bias == pytest.approx(0.0)
+
+
+def test_pin_row_bias_to_default_sets_zero(window):
+    window.adjust_row_bias(-0.05)
+    window.pin_row_bias_to_default()
+    assert window._current_spec().row_bias == pytest.approx(0.0)
+
+
+def test_pin_to_default_differs_from_auto(window):
+    """既定固定（0.0）と自動（None）は別の状態。既定ボタンのあとに自動へ戻せる。"""
+    window.pin_column_bias_to_default()
+    assert window._current_spec().column_bias == pytest.approx(0.0)
+    assert window._current_spec().column_bias is not None
+
+    window.reset_column_bias()
+    assert window._current_spec().column_bias is None
+
+
 def test_bias_marks_project_dirty(window):
     assert window._dirty is False
     window.adjust_column_bias(0.01)
@@ -519,7 +542,7 @@ def test_adjust_bias_ignored_when_axis_has_no_divider(window):
     xs, ys = layouts.internal_dividers("half_v")
     assert xs == ()  # half_v は上下のみ分割
     window.adjust_column_bias(0.01)
-    assert window._current_spec().column_bias is None
+    assert window._current_spec().column_bias == 0.0
 
 
 def test_column_bias_label_shows_manual_value(window):
@@ -528,7 +551,19 @@ def test_column_bias_label_shows_manual_value(window):
     assert "+4.0%" in window.column_bias_label.text()
 
 
-def test_column_bias_label_shows_auto_when_unset(window):
+def test_column_bias_label_shows_fixed_default_when_unset(window):
+    assert "既定位置" in window.column_bias_label.text()
+
+
+def test_column_bias_label_shows_pinned_default(window):
+    window.adjust_column_bias(0.04)  # いったん動かしてから既定へ戻す
+    window.pin_column_bias_to_default()
+    assert "既定位置" in window.column_bias_label.text()
+    assert "手動" not in window.column_bias_label.text()
+
+
+def test_column_bias_label_shows_auto_after_reset(window):
+    window.reset_column_bias()
     assert "自動" in window.column_bias_label.text()
 
 
@@ -548,7 +583,7 @@ def test_apply_to_article_spreads_bias(window):
     window.adjust_column_bias(0.05)
     window.apply_to_article()
     assert all(page.column_bias == pytest.approx(0.05) for page in window.project.articles[0].pages)
-    assert all(page.column_bias is None for page in window.project.articles[1].pages)
+    assert all(page.column_bias == 0.0 for page in window.project.articles[1].pages)
 
 
 def test_apply_to_all_spreads_bias(window):
@@ -588,8 +623,10 @@ def test_bias_on_empty_project_is_safe(qapp):
     try:
         win.adjust_column_bias(0.01)
         win.reset_column_bias()
+        win.pin_column_bias_to_default()
         win.adjust_row_bias(0.01)
         win.reset_row_bias()
+        win.pin_row_bias_to_default()
     finally:
         win.preview_cache.close()
         win.deleteLater()

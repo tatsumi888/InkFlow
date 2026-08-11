@@ -516,14 +516,35 @@ def test_output_page_count_is_unaffected_by_bias(single_page_pdf):
     assert len(list(composer.compose(project))) == 5
 
 
-def test_projects_without_bias_fields_produce_identical_output(single_page_pdf):
-    """None（既定値）は自動検出に任せる意味であり、明示的に None を渡しても同じ。"""
+def test_projects_without_bias_fields_default_to_fixed_position(single_page_pdf):
+    """バイアス未指定（既定値）は既定位置固定（0.0）であり、明示的に0.0を渡しても同じ。
+
+    自動検出は誤検出が無視できない頻度で起きたため既定では無効。ページごとに
+    ［自動］ボタン等で明示的に column_bias=None にしたときだけ自動検出が働く。
+    """
     implicit = make_project([single_page_pdf])
     explicit = make_project([single_page_pdf])
-    explicit.apply_layout_to_all(PageSpec("quad_2col", column_bias=None, row_bias=None))
+    explicit.apply_layout_to_all(PageSpec("quad_2col", column_bias=0.0, row_bias=0.0))
 
     for left, right in zip(composer.compose(implicit), composer.compose(explicit)):
         assert left.image.tobytes() == right.image.tobytes()
+
+
+def test_explicit_none_bias_enables_automatic_detection(tmp_path):
+    """明示的に column_bias=None にしたページだけ、既定位置固定から自動検出へ切り替わる。"""
+    from .conftest import make_asymmetric_pdf
+
+    pdf = make_asymmetric_pdf(tmp_path / "asym.pdf", gutter_center_ratio=0.42)
+
+    fixed = make_project([pdf])  # 既定のまま＝固定
+    fixed.apply_layout_to_all(PageSpec("quad_2col", include_overview=False))
+    fixed_pages = list(composer.compose(fixed))
+
+    auto = make_project([pdf])
+    auto.apply_layout_to_all(PageSpec("quad_2col", include_overview=False, column_bias=None))
+    auto_pages = list(composer.compose(auto))
+
+    assert fixed_pages[2].image.tobytes() != auto_pages[2].image.tobytes()
 
 
 def test_resolve_divider_offsets_detects_the_true_gutter(tmp_path):

@@ -74,11 +74,11 @@ InkFlowで使われる用語を定義する。日本語のドキュメント・�
 
 **英語表記**: Auto-trim / Content bbox detection
 
-### ノド／分割線の自動検出・手動微調整
+### ノド／分割線の位置調整（既定位置固定・自動検出・手動）
 
 **定義**: 2段組等の内部分割線（「ノド」＝段と段の間の余白）が、版面の非対称な余白のせいで既定位置（多くは50%）からズレて本文を切ってしまう問題への対処。
 
-**説明**: `composer.resolve_divider_offsets()` が、既定位置の前後12%の範囲で最も広い余白帯を自動検出し、見つかればそこへ分割線を寄せる（見つからなければ既定位置のまま）。`PageSpec.column_bias`（左右）/`row_bias`（上下）を指定するとその軸は自動検出せず、指定値（±20%まで）をそのまま使う。GUIでは右パネルの「分割位置の微調整」（`[－][自動][＋]`）から、CLIでは `--column-bias`/`--row-bias` から操作する。
+**説明**: `composer.resolve_divider_offsets()` が分割線の実際のオフセットを決める。`PageSpec.column_bias`（左右）/`row_bias`（上下）が数値（既定は `0.0`）ならその軸は既定位置に固定（またはその値をそのまま適用）し、自動検出は行わない。`None`（GUIで `[自動]` を明示的に押したときだけ入る値）のときだけ、既定位置の前後12%の範囲で最も広い余白帯を自動検出し、見つかればそこへ分割線を寄せる（見つからなければ既定位置のまま）。自動検出は既定で無効: 版面によっては過大な補正をしてしまうため、ページごとのオプトインにしてある。GUIでは右パネルの「分割位置の微調整」（`[－][自動][既定][＋]`）から、CLIでは `--column-bias`/`--row-bias`（数値指定、既定位置固定を一括設定）から操作する。
 
 **関連用語**: 分割コマ、オーバーラップ、`imaging.find_divider_offset()`、`layouts.internal_dividers()`
 
@@ -300,9 +300,9 @@ InkFlowで使われる用語を定義する。日本語のドキュメント・�
 - `include_overview`: 俯瞰を出力するか
 - `rotate`: 分割コマの縦横入替（0/90/270）
 - `rotate_overview`: 俯瞰の縦横入替（`None` = 分割コマと同じ）
-- `column_bias`/`row_bias`: 分割線の手動オフセット（±0.2。`None` = 自動検出に任せる）
+- `column_bias`/`row_bias`: 分割線のオフセット（±0.2。既定 `0.0`＝既定位置固定。`None` = 自動検出に任せる）
 
-**制約**: `rotate_overview` が `None` の場合、`effective_overview_rotation()` が `rotate` の値を返す（「分割と同じ」の実体）。同様に `column_bias`/`row_bias` が `None` の場合は自動検出結果が使われる。
+**制約**: `rotate_overview` が `None` の場合、`effective_overview_rotation()` が `rotate` の値を返す（「分割と同じ」の実体）。`column_bias`/`row_bias` は既定が `None` ではなく `0.0`（既定位置固定）である点が `rotate_overview` と異なる。`None` は GUIで `[自動]` を明示的に押したときだけ入る値で、そのときだけ自動検出結果が使われる。
 
 ### `Device`
 
@@ -414,7 +414,7 @@ dpi = max(俯瞰側のrequired_dpi, 分割コマ側のrequired_dpi)
 
 **実装箇所**: `inkflow/imaging.py` の `find_divider_offset()`、統合は `inkflow/composer.py` の `resolve_divider_offsets()`
 
-**補足**: 探索窓を12%に絞るのは、レイアウト選択という既存の意図と無関係な余白（ページ上下の余白など）を誤って選ばないため。
+**補足**: 探索窓を12%に絞るのは、レイアウト選択という既存の意図と無関係な余白（ページ上下の余白など）を誤って選ばないため。この計算自体は `PageSpec.column_bias`/`row_bias` が `None` のときだけ呼ばれる（既定値の `0.0` では呼ばれず既定位置固定）。
 
 **実装箇所**: `inkflow/composer.py` の `_required_dpi_for_page()`
 

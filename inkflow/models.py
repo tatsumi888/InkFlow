@@ -117,10 +117,12 @@ class PageSpec:
     # None は「分割コマと同じ向き」。俯瞰と分割コマで望ましい向きが逆になる誌面
     # （A4横を左右に割る場合など）があるため、別々に指定できるようにしている。
     rotate_overview: int | None = ROTATION_SAME_AS_PARTS
-    # 分割線（ノド）の手動オフセット。None なら自動検出に任せる。
-    # 値があれば、その軸の全ての分割線に一律適用し、自動検出は行わない。
-    column_bias: float | None = None
-    row_bias: float | None = None
+    # 分割線（ノド）の手動オフセット。既定は 0.0（オフセット無し＝既定位置に固定）。
+    # None なら自動検出に任せる。数値があれば、その軸の全ての分割線に一律適用し、
+    # 自動検出は行わない。自動検出は誤検出（過大な補正）が無視できない頻度で起きた
+    # ため、既定では無効にし、GUIの［自動］ボタンで明示的に有効化する方式にしている。
+    column_bias: float | None = 0.0
+    row_bias: float | None = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -190,8 +192,8 @@ class PageDefaults:
     include_overview: bool = True
     rotate: int = ROTATION_NONE
     rotate_overview: int | None = ROTATION_SAME_AS_PARTS
-    column_bias: float | None = None
-    row_bias: float | None = None
+    column_bias: float | None = 0.0
+    row_bias: float | None = 0.0
     overlap: float = layouts.DEFAULT_OVERLAP
     auto_trim: bool = True
     trim_threshold: int = 245
@@ -232,8 +234,16 @@ class PageDefaults:
             include_overview=_as_bool(data.get("overview"), base.include_overview),
             rotate=normalize_rotation(data.get("rotate"), base.rotate),
             rotate_overview=normalize_optional_rotation(data.get("rotate_overview")),
-            column_bias=normalize_optional_bias(data.get("column_bias")),
-            row_bias=normalize_optional_bias(data.get("row_bias")),
+            column_bias=(
+                normalize_optional_bias(data["column_bias"])
+                if "column_bias" in data
+                else base.column_bias
+            ),
+            row_bias=(
+                normalize_optional_bias(data["row_bias"])
+                if "row_bias" in data
+                else base.row_bias
+            ),
             overlap=layouts.clamp_overlap(_as_float(data.get("overlap"), base.overlap)),
             auto_trim=_as_bool(data.get("auto_trim"), base.auto_trim),
             trim_threshold=min(

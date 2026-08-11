@@ -263,10 +263,12 @@ class MainWindow(QMainWindow):
         self.column_bias_row, self.column_bias_buttons, self.column_bias_label = (
             self._build_bias_row(
                 "左右",
-                "2段組などの分割線が本文の途中を切ってしまう場合に使う。"
-                "［自動］に戻すと余白を自動検出した位置に任せる。",
+                "2段組などの分割線が本文の途中を切ってしまう場合に使う（既定は既定位置に固定）。"
+                "［自動］を押すとそのページだけ余白の自動検出を試す。"
+                "［既定］は自動検出を止めて既定位置に固定し直す。",
                 lambda: self.adjust_column_bias(-DIVIDER_BIAS_STEP),
                 self.reset_column_bias,
+                self.pin_column_bias_to_default,
                 lambda: self.adjust_column_bias(DIVIDER_BIAS_STEP),
             )
         )
@@ -276,6 +278,7 @@ class MainWindow(QMainWindow):
             "上下2分割・3分割などの分割線がずれる場合に使う。",
             lambda: self.adjust_row_bias(-DIVIDER_BIAS_STEP),
             self.reset_row_bias,
+            self.pin_row_bias_to_default,
             lambda: self.adjust_row_bias(DIVIDER_BIAS_STEP),
         )
         group_layout.addWidget(self.row_bias_row)
@@ -313,9 +316,10 @@ class MainWindow(QMainWindow):
         tooltip: str,
         on_minus,
         on_auto,
+        on_default,
         on_plus,
-    ) -> tuple[QWidget, tuple[QToolButton, QToolButton, QToolButton], QLabel]:
-        """「左右」「上下」の分割位置微調整に使う [－][自動][＋] + 現在値ラベルの1行。"""
+    ) -> tuple[QWidget, tuple[QToolButton, QToolButton, QToolButton, QToolButton], QLabel]:
+        """「左右」「上下」の分割位置微調整に使う [－][自動][既定][＋] + 現在値ラベルの1行。"""
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
@@ -327,19 +331,23 @@ class MainWindow(QMainWindow):
         minus_button.clicked.connect(on_minus)
         auto_button = QToolButton()
         auto_button.setText("自動")
-        auto_button.setToolTip("自動検出に戻す")
+        auto_button.setToolTip("余白の自動検出を有効にする（見つかればそこへ寄せる）")
         auto_button.clicked.connect(on_auto)
+        default_button = QToolButton()
+        default_button.setText("既定")
+        default_button.setToolTip("既定位置（オフセット無し）に固定する")
+        default_button.clicked.connect(on_default)
         plus_button = QToolButton()
         plus_button.setText("＋")
         plus_button.setToolTip(tooltip)
         plus_button.clicked.connect(on_plus)
-        for button in (minus_button, auto_button, plus_button):
+        for button in (minus_button, auto_button, default_button, plus_button):
             row_layout.addWidget(button)
 
         label = QLabel("—")
         row_layout.addWidget(label)
         row_layout.addStretch(1)
-        return row, (minus_button, auto_button, plus_button), label
+        return row, (minus_button, auto_button, default_button, plus_button), label
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("ファイル(&F)")
@@ -629,6 +637,8 @@ class MainWindow(QMainWindow):
         if not dividers:
             return "—"
         if bias is not None:
+            if bias == 0.0:
+                return "既定位置に固定"
             return f"手動 {bias * 100:+.1f}%"
         detected = offsets.get(dividers[0])
         if detected is None:
@@ -739,6 +749,13 @@ class MainWindow(QMainWindow):
             return
         self._set_current_spec(replace(spec, column_bias=None))
 
+    def pin_column_bias_to_default(self) -> None:
+        """自動検出も行わず、レイアウトの既定位置（オフセット無し）に固定する。"""
+        spec = self._current_spec()
+        if spec is None or spec.column_bias == 0.0:
+            return
+        self._set_current_spec(replace(spec, column_bias=0.0))
+
     def adjust_row_bias(self, delta: float) -> None:
         spec = self._current_spec()
         if spec is None:
@@ -754,6 +771,13 @@ class MainWindow(QMainWindow):
         if spec is None or spec.row_bias is None:
             return
         self._set_current_spec(replace(spec, row_bias=None))
+
+    def pin_row_bias_to_default(self) -> None:
+        """自動検出も行わず、レイアウトの既定位置（オフセット無し）に固定する。"""
+        spec = self._current_spec()
+        if spec is None or spec.row_bias == 0.0:
+            return
+        self._set_current_spec(replace(spec, row_bias=0.0))
 
     def apply_same_as_previous(self) -> None:
         """ひとつ前のページの設定を複製して、次のページへ進む。"""
