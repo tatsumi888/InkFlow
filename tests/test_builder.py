@@ -128,14 +128,32 @@ def test_build_epub_default_layout_gives_five_pages_per_source_page(tmp_path, ar
 
 
 def test_build_epub_bookmarks_one_per_article(tmp_path, article_pdfs):
+    """トップレベルの目次項目は記事1本につき1つ（俯瞰しおりは子項目に入るため増えない）。"""
     project = make_project(article_pdfs)
-    output, summary = build(tmp_path, project)
-    assert summary.bookmark_count == 3
+    output, _ = build(tmp_path, project)
 
     with zipfile.ZipFile(output) as archive:
         nav = ET.fromstring(archive.read("OEBPS/nav.xhtml"))
     labels = [a.text for a in nav.findall(".//x:nav/x:ol/x:li/x:a", XHTML_NS)]
     assert labels == ["01_巻頭特集", "02_インタビュー", "03_連載"]
+
+
+def test_build_epub_bookmark_count_includes_overview_pages(tmp_path, article_pdfs):
+    project = make_project(article_pdfs)
+    _, summary = build(tmp_path, project)
+    # 既定は俯瞰ページを含むので、記事しおり3件 + 俯瞰しおり(原稿 2+1+3=6ページぶん) = 9件。
+    assert summary.bookmark_count == 9
+
+
+def test_build_epub_overview_bookmarks_nest_under_their_article(tmp_path, article_pdfs):
+    project = make_project(article_pdfs)
+    output, _ = build(tmp_path, project)
+    with zipfile.ZipFile(output) as archive:
+        nav = ET.fromstring(archive.read("OEBPS/nav.xhtml"))
+    top_items = nav.findall(".//x:nav/x:ol/x:li", XHTML_NS)
+    # 01_巻頭特集は原稿2ページなので、俯瞰しおりが2件ぶら下がる。
+    children = top_items[0].findall("x:ol/x:li/x:a", XHTML_NS)
+    assert [a.text for a in children] == ["1ページ目", "2ページ目"]
 
 
 def test_build_epub_bookmark_points_at_article_first_page(tmp_path, article_pdfs):

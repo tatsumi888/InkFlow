@@ -9,10 +9,11 @@ Send to Kindle の変換系は EPUB3 の nav.xhtml を見る場合と、旧来�
 
 from __future__ import annotations
 
+import itertools
 import uuid
 import zipfile
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
@@ -82,6 +83,15 @@ class _PageEntry:
     media_type: str
 
 
+@dataclass
+class _Bookmark:
+    """目次の1項目。記事しおりは俯瞰ページの子しおりを持つことがある（1階層のみ）。"""
+
+    label: str
+    href: str
+    children: list[tuple[str, str]] = field(default_factory=list)
+
+
 class EpubWriteSummary:
     """書き出し結果の要約。"""
 
@@ -108,7 +118,7 @@ def write_epub(
     device: Device,
     options: ImageOptions,
     cover_image: Image.Image,
-    pages: Iterable[tuple[Image.Image, str | None]],
+    pages: Iterable[tuple[Image.Image, str | None, str | None]],
     *,
     language: str = "ja",
     author: str = "InkFlow",
@@ -117,8 +127,10 @@ def write_epub(
 ) -> EpubWriteSummary:
     """固定レイアウトEPUBを書き出す。
 
-    ``pages`` は ``(画像, しおり名 or None)`` の列。しおり名が入っている要素が
-    その記事の先頭ページになる。
+    ``pages`` は ``(画像, 記事しおり名 or None, 俯瞰しおり名 or None)`` の列。
+    記事しおり名が入っている要素がその記事の先頭ページになり、目次のトップ
+    レベル項目になる。俯瞰しおり名が入っている要素は、直近の記事しおりの
+    子項目（1階層のみ）として目次に現れる。
     """
     output_path = Path(output_path)
     identifier = identifier or f"urn:uuid:{uuid.uuid4()}"
@@ -128,7 +140,7 @@ def write_epub(
     media_type = imaging.media_type_for(options)
 
     entries: list[_PageEntry] = []
-    bookmarks: list[tuple[str, str]] = []
+    bookmarks: list[_Bookmark] = []
 
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -165,7 +177,7 @@ def write_epub(
                 )
             )
 
-            for index, (image, bookmark) in enumerate(pages):
+            for index, (image, article_bookmark, overview_bookmark) in enumerate(pages):
                 name = f"p{index:04d}"
                 image_name = f"{name}{extension}"
                 _write_image(archive, f"OEBPS/images/{image_name}", image, options)
@@ -188,11 +200,19 @@ def write_epub(
                         media_type=media_type,
                     )
                 )
-                if bookmark:
-                    bookmarks.append((bookmark, f"text/{name}.xhtml"))
+                href = f"text/{name}.xhtml"
+                if article_bookmark:
+                    bookmarks.append(_Bookmark(article_bookmark, href))
+                if overview_bookmark:
+                    # 記事しおりより前に俯瞰しおりが来ることは無いはずだが、安全側
+                    # として、その場合はトップレベル項目として取りこぼさない。
+                    if bookmarks:
+                        bookmarks[-1].children.append((overview_bookmark, href))
+                    else:
+                        bookmarks.append(_Bookmark(overview_bookmark, href))
 
             if not bookmarks:
-                bookmarks.append((title, "text/cover.xhtml"))
+                bookmarks.append(_Bookmark(title, "text/cover.xhtml"))
 
             archive.writestr(
                 "OEBPS/content.opf",
@@ -214,7 +234,7 @@ def write_epub(
     return EpubWriteSummary(
         path=output_path,
         page_count=len(entries),
-        bookmark_count=len(bookmarks),
+        bookmark_count=sum(1 + len(b.children) for b in bookmarks),
         size_bytes=output_path.stat().st_size,
     )
 
@@ -300,11 +320,18 @@ def _build_opf(
 """
 
 
-def _build_nav(title: str, language: str, bookmarks: list[tuple[str, str]]) -> str:
-    items = "\n".join(
-        f'      <li><a href={quoteattr(href)}>{escape(label)}</a></li>'
-        for label, href in bookmarks
-    )
+def _build_nav(title: str, language: str, bookmarks: list[_Bookmark]) -> str:
+    def render(entry: _Bookmark) -> str:
+        anchor = f'<a href={quoteattr(entry.href)}>{escape(entry.label)}</a>'
+        if not entry.children:
+            return f'      <li>{anchor}</li>'
+        children = "\n".join(
+            f'          <li><a href={quoteattr(href)}>{escape(label)}</a></li>'
+            for label, href in entry.children
+        )
+        return f'      <li>{anchor}\n        <ol>\n{children}\n        </ol>\n      </li>'
+
+    items = "\n".join(render(entry) for entry in bookmarks)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"
@@ -325,21 +352,29 @@ def _build_nav(title: str, language: str, bookmarks: list[tuple[str, str]]) -> s
 """
 
 
-def _build_ncx(title: str, identifier: str, bookmarks: list[tuple[str, str]]) -> str:
-    points = "\n".join(
-        f"""    <navPoint id="navpoint-{index + 1}" playOrder="{index + 1}">
-      <navLabel><text>{escape(label)}</text></navLabel>
-      <content src={quoteattr(href)}/>
-    </navPoint>"""
-        for index, (label, href) in enumerate(bookmarks)
-    )
+def _build_ncx(title: str, identifier: str, bookmarks: list[_Bookmark]) -> str:
+    order = itertools.count(1)
+
+    def render(label: str, href: str, children: list[tuple[str, str]]) -> str:
+        point_id = next(order)
+        lines = [
+            f'    <navPoint id="navpoint-{point_id}" playOrder="{point_id}">',
+            f'      <navLabel><text>{escape(label)}</text></navLabel>',
+            f'      <content src={quoteattr(href)}/>',
+        ]
+        lines.extend(render(child_label, child_href, []) for child_label, child_href in children)
+        lines.append('    </navPoint>')
+        return "\n".join(lines)
+
+    points = "\n".join(render(entry.label, entry.href, entry.children) for entry in bookmarks)
+    depth = 2 if any(entry.children for entry in bookmarks) else 1
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN"
   "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
   <head>
     <meta name="dtb:uid" content="{escape(identifier)}"/>
-    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:depth" content="{depth}"/>
     <meta name="dtb:totalPageCount" content="0"/>
     <meta name="dtb:maxPageNumber" content="0"/>
   </head>
@@ -353,7 +388,14 @@ def _build_ncx(title: str, identifier: str, bookmarks: list[tuple[str, str]]) ->
 
 def pages_with_bookmarks(
     composed: Iterable["object"],
-) -> Iterator[tuple[Image.Image, str | None]]:
-    """ComposedPage の列を ``(画像, しおり名 or None)`` に変換する。"""
+) -> Iterator[tuple[Image.Image, str | None, str | None]]:
+    """ComposedPage の列を ``(画像, 記事しおり名 or None, 俯瞰しおり名 or None)`` に変換する。
+
+    記事しおりはその記事の先頭出力ページに付く。俯瞰しおり（原稿ページ番号を
+    タイトルにしたもの）は俯瞰ページ（``full`` レイアウトの1枚だけの出力も含む）
+    に付き、``write_epub()`` 側で直近の記事しおりの子項目として目次に現れる。
+    """
     for page in composed:
-        yield (page.image, page.article_title if page.is_article_start else None)
+        article_bookmark = page.article_title if page.is_article_start else None
+        overview_bookmark = f"{page.source_page_index + 1}ページ目" if page.is_overview else None
+        yield (page.image, article_bookmark, overview_bookmark)

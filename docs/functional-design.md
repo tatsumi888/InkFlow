@@ -144,11 +144,14 @@ def sync_page_counts(project: Project) -> None
 **責務**:
 - 画像列としおり情報から、Kindleが固定レイアウトとして解釈するEPUB3を組み立てる
 - `mimetype` を先頭・無圧縮で配置するなどEPUBの構造要件を満たす
+- 目次（`nav.xhtml`/`toc.ncx`）を2階層で組み立てる: 記事しおり（トップレベル）と、その子項目としての俯瞰しおり（原稿ページ番号がタイトル）
 
 **インターフェース**:
 ```python
 def write_epub(output_path: Path, title: str, device: Device, options: ImageOptions,
-                cover_image: Image, pages: Iterable[tuple[Image, str | None]], ...) -> EpubWriteSummary
+                cover_image: Image,
+                pages: Iterable[tuple[Image, str | None, str | None]], ...) -> EpubWriteSummary
+                # pages の要素は (画像, 記事しおり名 or None, 俯瞰しおり名 or None)
 ```
 
 **依存関係**: `imaging`（画像エンコード）, 標準 `zipfile`
@@ -352,6 +355,8 @@ OEBPS/
   images/cover.png, p0000.png, ...
   text/cover.xhtml, p0000.xhtml, ...
 ```
+
+`nav.xhtml`/`toc.ncx` の目次は2階層。トップレベルは記事しおり（記事の先頭出力ページ）、その子項目が俯瞰しおり（俯瞰ページ1枚につき1つ、タイトルは原稿ページ番号）。子項目を持たない記事しおりは通常どおりフラットな `<li>`/`<navPoint>` のまま（`dtb:depth` も子が無ければ1のまま）。
 
 ## パフォーマンス最適化
 

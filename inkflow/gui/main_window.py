@@ -989,6 +989,38 @@ class MainWindow(QMainWindow):
         except InkFlowError as e:
             QMessageBox.critical(self, "開けません", str(e))
             return
+        self._activate_project(project)
+
+    def open_dropped_project(self, path: Path) -> None:
+        """D&D で渡されたプロジェクトファイルを、内容確認とユーザー確認を経て開く。
+
+        ドラッグ＆ドロップは［プロジェクトを開く］メニューより誤操作が起きやすい
+        ジェスチャーなので、まず内容（JSON構造・参照PDFの存在）を検証し、問題が
+        無ければタイトルや記事数を示して改めて確認を取ってから開く。
+        """
+        try:
+            project = Project.load(path)
+            project.validate_sources()
+            composer.sync_page_counts(project)
+        except InkFlowError as e:
+            QMessageBox.critical(self, "開けません", str(e))
+            return
+
+        page_count = sum(len(a.pages) for a in project.articles)
+        answer = QMessageBox.question(
+            self,
+            "プロジェクトを開く",
+            f"「{project.book_title()}」を開きますか？\n"
+            f"（記事 {len(project.articles)} 本 / 原稿 {page_count} ページ）",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if not self._confirm_discard_changes():
+            return
+        self._activate_project(project)
+
+    def _activate_project(self, project: Project) -> None:
+        """読み込んだプロジェクトを現在のプロジェクトとして差し替え、画面を更新する。"""
         self.project = project
         self.preview_cache.invalidate()
         self._current = 0
@@ -1139,10 +1171,17 @@ class MainWindow(QMainWindow):
     # ---- ドラッグ＆ドロップ -------------------------------------------
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
-        if self._pdf_paths_from(event) :
+        if self._pdf_paths_from(event) or self._project_path_from(event) is not None:
             event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:  # noqa: N802
+        # プロジェクトファイルを優先する。PDFと同時にドロップされた場合、
+        # プロジェクトを開くと現在の内容ごと差し替わるので、PDF追加は意味を失う。
+        project_path = self._project_path_from(event)
+        if project_path is not None:
+            self.open_dropped_project(project_path)
+            event.acceptProposedAction()
+            return
         paths = self._pdf_paths_from(event)
         if paths:
             self.add_pdf_paths(paths)
@@ -1155,3 +1194,16 @@ class MainWindow(QMainWindow):
             return []
         paths = [Path(url.toLocalFile()) for url in mime.urls() if url.isLocalFile()]
         return [p for p in paths if p.suffix.lower() == ".pdf"]
+
+    @staticmethod
+    def _project_path_from(event) -> Path | None:
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            return None
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            path = Path(url.toLocalFile())
+            if path.suffix.lower() == ".json":
+                return path
+        return None

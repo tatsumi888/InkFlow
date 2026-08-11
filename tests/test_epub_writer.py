@@ -16,14 +16,26 @@ XHTML_NS = {"x": "http://www.w3.org/1999/xhtml"}
 DEVICE = devices.get_device("custom:120x160")
 
 
-def make_pages(count: int, bookmarks: dict[int, str] | None = None):
+def make_pages(
+    count: int,
+    bookmarks: dict[int, str] | None = None,
+    overview_bookmarks: dict[int, str] | None = None,
+):
     bookmarks = bookmarks or {}
+    overview_bookmarks = overview_bookmarks or {}
     for index in range(count):
         image = Image.new("L", DEVICE.size, 255 - index)
-        yield (image, bookmarks.get(index))
+        yield (image, bookmarks.get(index), overview_bookmarks.get(index))
 
 
-def write(tmp_path, page_count=4, bookmarks=None, options=None, **kwargs):
+def write(
+    tmp_path,
+    page_count=4,
+    bookmarks=None,
+    overview_bookmarks=None,
+    options=None,
+    **kwargs,
+):
     output = tmp_path / "book.epub"
     summary = epub_writer.write_epub(
         output,
@@ -31,7 +43,7 @@ def write(tmp_path, page_count=4, bookmarks=None, options=None, **kwargs):
         device=DEVICE,
         options=options or ImageOptions(),
         cover_image=Image.new("L", DEVICE.size, 200),
-        pages=make_pages(page_count, bookmarks),
+        pages=make_pages(page_count, bookmarks, overview_bookmarks),
         identifier="urn:uuid:00000000-0000-0000-0000-000000000000",
         modified=datetime(2026, 8, 10, tzinfo=timezone.utc),
         **kwargs,
@@ -188,6 +200,85 @@ def test_falls_back_to_title_when_no_bookmarks(tmp_path):
     assert summary.bookmark_count == 1
 
 
+# ---- 俯瞰しおり（記事しおりの子項目） -------------------------------------
+
+
+def test_overview_bookmark_nests_under_article_in_nav(tmp_path):
+    output, summary = write(
+        tmp_path,
+        page_count=5,
+        bookmarks={0: "巻頭特集"},
+        overview_bookmarks={0: "1ページ目", 2: "3ページ目"},
+    )
+    with zipfile.ZipFile(output) as archive:
+        nav = ET.fromstring(archive.read("OEBPS/nav.xhtml"))
+
+    # トップレベルは記事しおりだけ（既存の挙動を壊していないこと）。
+    top_labels = [a.text for a in nav.findall(".//x:nav/x:ol/x:li/x:a", XHTML_NS)]
+    assert top_labels == ["巻頭特集"]
+
+    # 俯瞰しおりは、その記事の <li> の中の入れ子 <ol> に入る。
+    nested_anchors = nav.findall(".//x:nav/x:ol/x:li/x:ol/x:li/x:a", XHTML_NS)
+    nested = [(a.text, a.get("href")) for a in nested_anchors]
+    assert nested == [
+        ("1ページ目", "text/p0000.xhtml"),
+        ("3ページ目", "text/p0002.xhtml"),
+    ]
+
+
+def test_overview_bookmark_nests_under_article_in_ncx(tmp_path):
+    output, _ = write(
+        tmp_path,
+        page_count=3,
+        bookmarks={0: "巻頭特集"},
+        overview_bookmarks={0: "1ページ目", 1: "2ページ目"},
+    )
+    with zipfile.ZipFile(output) as archive:
+        ncx = ET.fromstring(archive.read("OEBPS/toc.ncx"))
+
+    top_points = ncx.findall("ncx:navMap/ncx:navPoint", NCX_NS)
+    assert len(top_points) == 1
+    assert top_points[0].find("ncx:navLabel/ncx:text", NCX_NS).text == "巻頭特集"
+
+    child_points = top_points[0].findall("ncx:navPoint", NCX_NS)
+    child_labels = [p.find("ncx:navLabel/ncx:text", NCX_NS).text for p in child_points]
+    assert child_labels == ["1ページ目", "2ページ目"]
+
+    # playOrder は親→子の順で連番になっていること。
+    play_orders = [p.get("playOrder") for p in (top_points[0], *child_points)]
+    assert play_orders == ["1", "2", "3"]
+
+    assert ncx.find("ncx:head/ncx:meta[@name='dtb:depth']", NCX_NS).get("content") == "2"
+
+
+def test_bookmark_count_includes_nested_overview_bookmarks(tmp_path):
+    _, summary = write(
+        tmp_path,
+        page_count=4,
+        bookmarks={0: "記事1", 2: "記事2"},
+        overview_bookmarks={0: "1ページ目", 1: "2ページ目", 2: "3ページ目"},
+    )
+    # 記事しおり2件 + 俯瞰しおり3件 = 5件。
+    assert summary.bookmark_count == 5
+
+
+def test_dtb_depth_stays_one_without_overview_bookmarks(tmp_path):
+    output, _ = write(tmp_path, page_count=3, bookmarks={0: "記事1"})
+    with zipfile.ZipFile(output) as archive:
+        ncx = ET.fromstring(archive.read("OEBPS/toc.ncx"))
+    assert ncx.find("ncx:head/ncx:meta[@name='dtb:depth']", NCX_NS).get("content") == "1"
+
+
+def test_overview_bookmark_without_preceding_article_becomes_top_level(tmp_path):
+    """記事しおりより前に俯瞰しおりが来る想定外のケースでも取りこぼさない。"""
+    output, summary = write(tmp_path, page_count=2, overview_bookmarks={0: "1ページ目"})
+    with zipfile.ZipFile(output) as archive:
+        nav = ET.fromstring(archive.read("OEBPS/nav.xhtml"))
+    top_labels = [a.text for a in nav.findall(".//x:nav/x:ol/x:li/x:a", XHTML_NS)]
+    assert top_labels == ["1ページ目"]
+    assert summary.bookmark_count == 1
+
+
 def test_special_characters_are_escaped(tmp_path):
     output, _ = write(tmp_path, page_count=2, bookmarks={0: 'A & B <C> "D"'})
     with zipfile.ZipFile(output) as archive:
@@ -258,14 +349,43 @@ def test_write_to_unwritable_path_raises(tmp_path):
 
 def test_pages_with_bookmarks_maps_article_starts():
     class Fake:
-        def __init__(self, title, start):
+        def __init__(self, title, start, source_page_index=0, is_overview=False):
             self.image = title
             self.article_title = title
             self.is_article_start = start
+            self.source_page_index = source_page_index
+            self.is_overview = is_overview
 
     result = list(
         epub_writer.pages_with_bookmarks(
             [Fake("A", True), Fake("A", False), Fake("B", True)]
         )
     )
-    assert result == [("A", "A"), ("A", None), ("B", "B")]
+    assert result == [("A", "A", None), ("A", None, None), ("B", "B", None)]
+
+
+def test_pages_with_bookmarks_maps_overview_pages():
+    """俯瞰ページには、原稿ページ番号（1始まり）をタイトルにした俯瞰しおりが付く。"""
+
+    class Fake:
+        def __init__(self, title, start, source_page_index, is_overview):
+            self.image = title
+            self.article_title = title
+            self.is_article_start = start
+            self.source_page_index = source_page_index
+            self.is_overview = is_overview
+
+    result = list(
+        epub_writer.pages_with_bookmarks(
+            [
+                Fake("A", True, source_page_index=0, is_overview=True),
+                Fake("A", False, source_page_index=0, is_overview=False),
+                Fake("A", False, source_page_index=1, is_overview=True),
+            ]
+        )
+    )
+    assert result == [
+        ("A", "A", "1ページ目"),
+        ("A", None, None),
+        ("A", None, "2ページ目"),
+    ]

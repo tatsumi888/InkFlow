@@ -1332,6 +1332,225 @@ def test_pdf_paths_from_without_urls(qapp):
     assert MainWindow._pdf_paths_from(FakeEvent()) == []
 
 
+def test_project_path_from_finds_json(qapp, tmp_path):
+    from PySide6.QtCore import QMimeData, QUrl
+
+    class FakeEvent:
+        def __init__(self, mime):
+            self._mime = mime
+
+        def mimeData(self):
+            return self._mime
+
+    mime = QMimeData()
+    mime.setUrls(
+        [
+            QUrl.fromLocalFile(str(tmp_path / "a.pdf")),
+            QUrl.fromLocalFile(str(tmp_path / "book.inkflow.json")),
+        ]
+    )
+    path = MainWindow._project_path_from(FakeEvent(mime))
+    assert path.name == "book.inkflow.json"
+
+
+def test_project_path_from_without_json_returns_none(qapp, tmp_path):
+    from PySide6.QtCore import QMimeData, QUrl
+
+    class FakeEvent:
+        def __init__(self, mime):
+            self._mime = mime
+
+        def mimeData(self):
+            return self._mime
+
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(tmp_path / "a.pdf"))])
+    assert MainWindow._project_path_from(FakeEvent(mime)) is None
+
+
+def test_project_path_from_without_urls(qapp):
+    from PySide6.QtCore import QMimeData
+
+    class FakeEvent:
+        def mimeData(self):
+            return QMimeData()
+
+    assert MainWindow._project_path_from(FakeEvent()) is None
+
+
+# ---- ドロップされたプロジェクトファイルを開く ---------------------------
+
+
+def test_open_dropped_project_opens_after_confirmation(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    saved_path = tmp_path / "book.inkflow.json"
+    window.select_layout(layouts.layout_ids().index("half_h"))
+    window._save_to(saved_path)
+
+    fresh = MainWindow(Project())
+    try:
+        monkeypatch.setattr(
+            "inkflow.gui.main_window.QMessageBox.question",
+            lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+        )
+        fresh.open_dropped_project(saved_path)
+        assert len(fresh.project.articles) == 3
+        assert fresh.project.articles[0].pages[0].layout_id == "half_h"
+    finally:
+        fresh.preview_cache.close()
+        fresh.deleteLater()
+
+
+def test_open_dropped_project_cancelled_leaves_project_unchanged(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    saved_path = tmp_path / "book.inkflow.json"
+    window.select_layout(layouts.layout_ids().index("half_h"))
+    window._save_to(saved_path)
+
+    fresh = MainWindow(Project())
+    try:
+        monkeypatch.setattr(
+            "inkflow.gui.main_window.QMessageBox.question",
+            lambda *args, **kwargs: QMessageBox.StandardButton.No,
+        )
+        fresh.open_dropped_project(saved_path)
+        assert fresh.project.articles == []  # 開かれていない
+    finally:
+        fresh.preview_cache.close()
+        fresh.deleteLater()
+
+
+def test_open_dropped_project_respects_unsaved_changes_guard(window, tmp_path, monkeypatch):
+    """内容確認とユーザー確認（開く）を通っても、未保存の変更があれば破棄確認が必要。"""
+    from PySide6.QtWidgets import QMessageBox
+
+    saved_path = tmp_path / "book.inkflow.json"
+    window._save_to(saved_path)
+
+    # window はフィクスチャ生成時点では未保存の変更が無いので、ここで作る。
+    window.select_layout(layouts.layout_ids().index("half_h"))
+    assert window._dirty is True
+
+    # 1回目の question 呼び出しは「開きますか？」→ Yes、
+    # 2回目は「保存しますか？」（破棄確認）→ Cancel、で開かれないはず。
+    answers = iter([QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.Cancel])
+    monkeypatch.setattr(
+        "inkflow.gui.main_window.QMessageBox.question",
+        lambda *args, **kwargs: next(answers),
+    )
+    original_article_count = len(window.project.articles)
+    window.open_dropped_project(saved_path)
+
+    assert len(window.project.articles) == original_article_count  # 破棄されなかった
+
+
+def test_open_dropped_project_rejects_invalid_json(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    bad_path = tmp_path / "broken.inkflow.json"
+    bad_path.write_text("{not valid json", encoding="utf-8")
+
+    captured = {}
+    monkeypatch.setattr(
+        "inkflow.gui.main_window.QMessageBox.critical",
+        lambda parent, title, text: captured.setdefault("text", text),
+    )
+    asked = []
+    monkeypatch.setattr(
+        "inkflow.gui.main_window.QMessageBox.question",
+        lambda *args, **kwargs: asked.append(True),
+    )
+
+    win = MainWindow(Project())
+    try:
+        win.open_dropped_project(bad_path)
+        assert "text" in captured  # エラーダイアログが出た
+        assert asked == []  # 確認ダイアログまでは進まない
+    finally:
+        win.preview_cache.close()
+        win.deleteLater()
+
+
+def test_open_dropped_project_rejects_missing_source_pdfs(qapp, tmp_path, monkeypatch):
+    """参照PDFが見つからない場合は「不整合」として開かず、確認ダイアログも出さない。"""
+    from PySide6.QtWidgets import QMessageBox
+
+    # window フィクスチャのPDFは開いているハンドルがありWindowsでは削除できないため、
+    # ここだけ独立したPDFを作り、保存後に削除して「参照先が無い」状況を作る。
+    source_dir = tmp_path / "source_articles"
+    source_dir.mkdir()
+    missing_pdf = make_pdf(source_dir / "01.pdf")
+    project = builder.project_from_pdfs([missing_pdf], title="t", device_id=TEST_DEVICE)
+    saved_path = tmp_path / "book.inkflow.json"
+    project.save(saved_path)
+    missing_pdf.unlink()
+
+    captured = {}
+    monkeypatch.setattr(
+        "inkflow.gui.main_window.QMessageBox.critical",
+        lambda parent, title, text: captured.setdefault("text", text),
+    )
+    asked = []
+    monkeypatch.setattr(
+        "inkflow.gui.main_window.QMessageBox.question",
+        lambda *args, **kwargs: asked.append(True),
+    )
+
+    fresh = MainWindow(Project())
+    try:
+        fresh.open_dropped_project(saved_path)
+        assert "text" in captured
+        assert asked == []
+        assert fresh.project.articles == []
+    finally:
+        fresh.preview_cache.close()
+        fresh.deleteLater()
+
+
+def test_drop_event_prioritizes_project_file_over_pdfs(window, tmp_path, monkeypatch):
+    from PySide6.QtCore import QMimeData, QUrl
+    from PySide6.QtWidgets import QMessageBox
+
+    saved_path = tmp_path / "book.inkflow.json"
+    window.select_layout(layouts.layout_ids().index("half_h"))
+    window._save_to(saved_path)
+
+    calls = []
+    monkeypatch.setattr(
+        MainWindow, "open_dropped_project", lambda self, path: calls.append(("project", path))
+    )
+    monkeypatch.setattr(
+        MainWindow, "add_pdf_paths", lambda self, paths: calls.append(("pdfs", paths))
+    )
+
+    mime = QMimeData()
+    mime.setUrls(
+        [
+            QUrl.fromLocalFile(str(tmp_path / "extra.pdf")),
+            QUrl.fromLocalFile(str(saved_path)),
+        ]
+    )
+
+    class FakeEvent:
+        def __init__(self, mime):
+            self._mime = mime
+            self.accepted = False
+
+        def mimeData(self):
+            return self._mime
+
+        def acceptProposedAction(self):
+            self.accepted = True
+
+    event = FakeEvent(mime)
+    window.dropEvent(event)
+
+    assert calls == [("project", saved_path)]
+    assert event.accepted is True
+
+
 # ---- 起動引数の解釈 ---------------------------------------------------
 
 
