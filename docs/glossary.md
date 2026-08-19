@@ -84,6 +84,16 @@ InkFlowで使われる用語を定義する。日本語のドキュメント・�
 
 **英語表記**: Gutter detection / Divider bias
 
+### ショートカットプリセット
+
+**定義**: 任意のページに適用した分割設定一式（`PageSpec` の `layout_id` / `include_overview` / `rotate` / `rotate_overview` / `column_bias` / `row_bias`）を5個のスロットへ保存し、キー1つで別のページへ呼び出せる機能。
+
+**説明**: 右手をマウスに置いたまま左手だけで操作できるよう、QWERTY配列の左手側のみを使う。ホームロー `A S D F G`（適用）と、その真下 `Z X C V B`（保存）を同じ列で対応させる（`A`⇔`Z`など）。割り当ては号（プロジェクト）ごとではなくアプリ全体の設定として `%APPDATA%\InkFlow\config.json` に保存し、アプリを再起動しても引き継ぐ。右パネルに5スロットの内容を常時表示する。
+
+**関連用語**: `PageSpec`、`inkflow/gui/shortcut_presets.py`
+
+**英語表記**: Shortcut preset
+
 ### しおり
 
 **定義**: EPUB内の目次項目。記事しおり（1記事につき1つ、その記事の先頭出力ページへ移動できる）と、俯瞰しおり（俯瞰ページ1枚につき1つ、直近の記事しおりの子項目として目次に現れる）の2種類がある。

@@ -50,6 +50,7 @@ from ..models import (
 
 # 俯瞰の向きの選択肢。None は「分割コマと同じ」。
 OVERVIEW_ROTATION_CHOICES: tuple[int | None, ...] = (None, *ROTATIONS)
+from . import shortcut_presets
 from .page_view import PageOverlay, PageView
 from .settings_dialog import BookSettingsDialog
 from .worker import BuildWorker
@@ -83,6 +84,8 @@ Enter              前ページと同じ設定にして次へ
 O                  ページ全体（俯瞰）の有無を切り替え
 R                  分割コマの縦横入替（なし → 右90° → 左90°）
 Shift+R            ページ全体（俯瞰）の縦横入替（分割と同じ → なし → 右90° → 左90°）
+A S D F G          ショートカットプリセットを適用（右パネルに内容を常時表示）
+Z X C V B          いまのページの設定をショートカットプリセットへ保存（同じ列がA↔Z等の対）
 Ctrl+N             新規プロジェクト
 Ctrl+O             PDFを追加
 Ctrl+S             プロジェクトを保存
@@ -106,6 +109,9 @@ class MainWindow(QMainWindow):
         # 直近のプレビューで実際に使われた分割線オフセット（自動検出結果を含む）。
         # サイドパネルのラベル表示に使う。_update_preview() の直後に必ず更新される。
         self._current_divider_offsets: tuple[dict[float, float], dict[float, float]] = ({}, {})
+        # ショートカットプリセット（キー → 保存済みの分割設定）。アプリ全体の設定
+        # として %APPDATA%\InkFlow\config.json から読み込む（プロジェクトとは無関係）。
+        self._shortcut_presets: dict[str, PageSpec | None] = shortcut_presets.load_presets()
 
         self.setWindowTitle(APP_NAME)
         self.resize(1180, 820)
@@ -284,6 +290,21 @@ class MainWindow(QMainWindow):
         group_layout.addWidget(self.row_bias_row)
         layout.addWidget(group)
 
+        preset_group = QGroupBox("ショートカットプリセット")
+        preset_layout = QVBoxLayout(preset_group)
+        self.shortcut_preset_labels: dict[str, QLabel] = {}
+        for apply_key, save_key in zip(
+            shortcut_presets.APPLY_KEYS, shortcut_presets.SAVE_KEYS
+        ):
+            label = QLabel("—")
+            label.setWordWrap(True)
+            label.setToolTip(
+                f"適用: {apply_key}　保存: {save_key}（いまのページの設定で上書き）"
+            )
+            self.shortcut_preset_labels[apply_key] = label
+            preset_layout.addWidget(label)
+        layout.addWidget(preset_group)
+
         apply_group = QGroupBox("まとめて適用")
         apply_layout = QVBoxLayout(apply_group)
         for text, tooltip, slot in (
@@ -399,6 +420,19 @@ class MainWindow(QMainWindow):
             action.triggered.connect(slot)
             self.addAction(action)
 
+        for apply_key in shortcut_presets.APPLY_KEYS:
+            action = QAction(self)
+            action.setShortcut(apply_key)
+            action.triggered.connect(lambda _=False, k=apply_key: self.apply_shortcut_preset(k))
+            self.addAction(action)
+        # 保存キーは、同じ列の適用キー（＝スロットの識別子）へ紐付ける。
+        # 例: Z を押したら "Z" ではなく対応するスロット "A" へ保存する。
+        for slot_key, save_key in zip(shortcut_presets.APPLY_KEYS, shortcut_presets.SAVE_KEYS):
+            action = QAction(self)
+            action.setShortcut(save_key)
+            action.triggered.connect(lambda _=False, k=slot_key: self.save_shortcut_preset(k))
+            self.addAction(action)
+
     def _add_action(self, menu, text: str, slot, shortcut=None) -> QAction:
         action = QAction(text, self)
         if shortcut is not None:
@@ -415,6 +449,7 @@ class MainWindow(QMainWindow):
         self._update_preview()
         self._update_side_panel()
         self._update_summary()
+        self._update_shortcut_preset_panel()
 
     def _rebuild_flat(self) -> None:
         self._flat = [
@@ -455,6 +490,20 @@ class MainWindow(QMainWindow):
             f"　{page_index + 1}ページ目 — {layout_def.label.split('（')[0]}{overview}"
             f"{rotation}（{spec.output_page_count()}枚）"
         )
+
+    @staticmethod
+    def _preset_summary_text(spec: PageSpec) -> str:
+        """ショートカットプリセットの内容を1行で表す（ページ番号や枚数は含めない）。"""
+        layout_def = layouts.get_layout(spec.layout_id)
+        overview = "＋俯瞰" if spec.include_overview and layout_def.id != "full" else ""
+        rotation = f"・{spec.rotation_label()}" if spec.rotate != ROTATION_NONE else ""
+        return f"{layout_def.label.split('（')[0]}{overview}{rotation}"
+
+    def _update_shortcut_preset_panel(self) -> None:
+        for apply_key, save_key in zip(shortcut_presets.APPLY_KEYS, shortcut_presets.SAVE_KEYS):
+            spec = self._shortcut_presets.get(apply_key)
+            summary = self._preset_summary_text(spec) if spec is not None else "未設定"
+            self.shortcut_preset_labels[apply_key].setText(f"{apply_key}: {summary}")
 
     def _select_current_in_tree(self) -> None:
         if not self._flat:
@@ -778,6 +827,32 @@ class MainWindow(QMainWindow):
         if spec is None or spec.row_bias == 0.0:
             return
         self._set_current_spec(replace(spec, row_bias=0.0))
+
+    def apply_shortcut_preset(self, key: str) -> None:
+        """キーに保存済みの分割設定を、いま見ているページへ適用する。"""
+        spec = self._current_spec()
+        if spec is None:
+            return
+        preset = self._shortcut_presets.get(key)
+        if preset is None:
+            self.statusBar().showMessage(f"プリセット {key} には設定が保存されていません", 3000)
+            return
+        self._set_current_spec(replace(preset))
+        self.statusBar().showMessage(f"プリセット {key} の設定を適用しました", 2000)
+
+    def save_shortcut_preset(self, key: str) -> None:
+        """いま見ているページの分割設定を、プリセットスロットへ上書き保存する。
+
+        ``key`` は保存キー自体（Z等）ではなく、対応する適用キー（A等）で
+        呼ばれる想定。呼び出し元（_build_shortcuts）でその対応付けをしている。
+        """
+        spec = self._current_spec()
+        if spec is None:
+            return
+        self._shortcut_presets[key] = replace(spec)
+        shortcut_presets.save_presets(self._shortcut_presets)
+        self._update_shortcut_preset_panel()
+        self.statusBar().showMessage(f"現在の設定をプリセット {key} に保存しました", 3000)
 
     def apply_same_as_previous(self) -> None:
         """ひとつ前のページの設定を複製して、次のページへ進む。"""

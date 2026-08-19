@@ -146,6 +146,16 @@ GUIテストで `export_epub()` 等を通して本物の `BuildWorker`（`QThrea
 
 数字キー（`1`〜`7`）をレイアウト選択のショートカットに割り当てているため、メインウィンドウに `QLineEdit` を置くと入力を奪われる。テキスト入力は必ずモーダルダイアログ（`BookSettingsDialog` / `QInputDialog`）側に置く。
 
+### 8. `shortcut_presets.config_path()` を触るテストは必ずパッチする
+
+`MainWindow.__init__()` は生成のたびに `shortcut_presets.load_presets()` を呼ぶ。パッチせずにテストで `MainWindow` を作ると、実際の `%APPDATA%\InkFlow\config.json` を読み書きしてしまい、開発機の実環境を汚したり、あるテストで保存した内容が別のテストへ漏れたりする。`tests/test_gui.py` の `isolated_shortcut_presets_config`（autouse）がこれを防いでいる。`MainWindow` を生成する新しいテストファイルを追加するときは、同様のパッチ（`monkeypatch.setattr(shortcut_presets, "config_path", lambda: tmp_path / "config.json")`）を必ず入れること。
+
+### 8-2. キーボードショートカットは、ハンドラを直接呼ぶテストでは配線ミスを検出できない
+
+ショートカットプリセット機能の実装時、`_build_shortcuts()` で保存キー（Z等）用の `QAction` を登録する際に、誤って保存キー自体をスロットのキーとして渡していた（`Z` を押すと `self._shortcut_presets["A"]` ではなく `self._shortcut_presets["Z"]` に保存されるバグ）。`save_shortcut_preset("A")` をテストから直接呼ぶユニットテストは**この配線ミスを一切検出できない**——ハンドラの中身は正しいままだったため。実際にユーザーが Z キーを押して初めて発覚した。
+
+**教訓**: `QAction.setShortcut()` で登録したキーが正しいハンドラ・正しい引数へ実際に配線されているかは、`PySide6.QtTest.QTest.keyClick(window, Qt.Key.Key_X)` で実キーイベントを送って検証しないと確認できない。ただし `WindowShortcut`（既定のコンテキスト）は**ウィンドウが表示状態（`window.show()` + `QTest.qWaitForWindowExposed(window)`）でないと発火しない**——offscreenプラットフォームでも同様。`tests/test_gui.py::test_real_keypress_apply_and_save_round_trip_for_every_slot` がこのパターンの参考実装。
+
 ## テスト
 
 - 実物の雑誌PDFは持ち込まない。`tests/conftest.py` の `make_pdf()` が PyMuPDF で2段組ページを合成する。

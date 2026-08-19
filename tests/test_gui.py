@@ -27,8 +27,22 @@ def qapp():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def isolated_shortcut_presets_config(tmp_path, monkeypatch):
+    """ショートカットプリセットの設定ファイルをテスト用の一時パスへ逃がす。
+
+    MainWindow は生成時に必ず shortcut_presets.load_presets() を呼ぶため、
+    パッチしないと実際の %APPDATA%\\InkFlow\\config.json を読み書きしてしまい、
+    開発者の実環境を汚したりテスト間で状態が漏れたりする。autouse にして、
+    このファイル内で MainWindow を直接 new するテストも含め漏れなく効かせる。
+    """
+    from inkflow.gui import shortcut_presets
+
+    monkeypatch.setattr(shortcut_presets, "config_path", lambda: tmp_path / "config.json")
+
+
 @pytest.fixture
-def window(qapp, article_pdfs):
+def window(qapp, article_pdfs, isolated_shortcut_presets_config):
     project = builder.project_from_pdfs(
         article_pdfs, title="月刊テスト", issue="2026年8月号", device_id=TEST_DEVICE
     )
@@ -642,6 +656,170 @@ def test_preview_reflects_manual_bias(window):
     assert biased_rects != plain_rects
     # 左段（左上コマ）の右端が、バイアス分だけ右に動いているはず。
     assert biased_rects[0][2] > plain_rects[0][2]
+
+
+# ---- ショートカットプリセット --------------------------------------------
+
+
+def test_shortcut_preset_keys_do_not_collide_with_existing_shortcuts():
+    from inkflow.gui import shortcut_presets
+
+    existing = {"O", "R"} | {str(n) for n in range(1, 8)}
+    used = set(shortcut_presets.APPLY_KEYS) | set(shortcut_presets.SAVE_KEYS)
+    assert existing.isdisjoint(used)
+
+
+def test_real_keypress_on_save_key_stores_into_the_paired_slot(window):
+    """実キー入力での回帰テスト。
+
+    save_shortcut_preset()を直接Pythonから呼ぶテストは、_build_shortcuts()での
+    QAction配線自体のバグ（保存キー自体をスロットキーとして使ってしまい、
+    Zを押すと "A" ではなく "Z" というスロットに保存されていた）を検出できな
+    かった。実際のQtキーイベント経由で確認する。
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    # WindowShortcut コンテキストのQActionは、ウィンドウが表示状態でないと
+    # 実キーイベント経由では発火しない（offscreenプラットフォームでも同様）。
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+
+    QTest.keyClick(window, Qt.Key.Key_Z)
+
+    assert window._shortcut_presets["A"] is not None
+    assert "Z" not in window._shortcut_presets  # 保存キー自体をキーにしていない
+
+
+def test_real_keypress_apply_and_save_round_trip_for_every_slot(window):
+    """A〜G/Z〜Bの5組すべてで、実キー入力での保存→適用が正しく対応する。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from inkflow.gui import shortcut_presets
+
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+
+    key_codes = {
+        "A": Qt.Key.Key_A, "S": Qt.Key.Key_S, "D": Qt.Key.Key_D,
+        "F": Qt.Key.Key_F, "G": Qt.Key.Key_G,
+        "Z": Qt.Key.Key_Z, "X": Qt.Key.Key_X, "C": Qt.Key.Key_C,
+        "V": Qt.Key.Key_V, "B": Qt.Key.Key_B,
+    }
+    layout_ids = layouts.layout_ids()
+
+    for index, (apply_key, save_key) in enumerate(
+        zip(shortcut_presets.APPLY_KEYS, shortcut_presets.SAVE_KEYS)
+    ):
+        distinct_layout = layout_ids[index % len(layout_ids)]
+        # 適用前に必ず違うレイアウトへ切り替える（distinct_layout と衝突しない値）。
+        reset_layout = layout_ids[(index + 1) % len(layout_ids)]
+
+        window.select_layout(layout_ids.index(distinct_layout))
+        QTest.keyClick(window, key_codes[save_key])
+        assert window._shortcut_presets[apply_key] is not None
+        assert window._shortcut_presets[apply_key].layout_id == distinct_layout
+
+        window.select_layout(layout_ids.index(reset_layout))
+        QTest.keyClick(window, key_codes[apply_key])
+        assert window._current_spec().layout_id == distinct_layout
+
+
+def test_shortcut_preset_panel_shows_unset_initially(window):
+    for key in window.shortcut_preset_labels:
+        assert "未設定" in window.shortcut_preset_labels[key].text()
+
+
+def test_save_shortcut_preset_stores_current_spec_and_updates_panel(window):
+    window.select_layout(layouts.layout_ids().index("six_2col"))
+    window.set_rotation(90)
+
+    window.save_shortcut_preset("A")
+
+    assert window._shortcut_presets["A"] == window._current_spec()
+    assert "二段組6分割" in window.shortcut_preset_labels["A"].text()
+
+
+def test_apply_shortcut_preset_restores_saved_spec(window):
+    window.select_layout(layouts.layout_ids().index("six_2col"))
+    window.set_rotation(90)
+    window.save_shortcut_preset("A")
+
+    window.select_layout(layouts.layout_ids().index("full"))
+    assert window._current_spec().layout_id == "full"
+
+    window.apply_shortcut_preset("A")
+    assert window._current_spec().layout_id == "six_2col"
+    assert window._current_spec().rotate == 90
+
+
+def test_apply_shortcut_preset_on_empty_slot_does_not_crash(window):
+    original = window._current_spec()
+    window.apply_shortcut_preset("S")  # 何も保存していない
+    assert window._current_spec() == original
+    assert "保存されていません" in window.statusBar().currentMessage()
+
+
+def test_apply_shortcut_preset_copies_rather_than_aliases(window):
+    """プリセット適用後にページを個別に変更しても、保存済みプリセット自体は変わらない。"""
+    window.select_layout(layouts.layout_ids().index("six_2col"))
+    window.save_shortcut_preset("A")
+    stored_before = window._shortcut_presets["A"]
+
+    window.apply_shortcut_preset("A")
+    window.set_rotation(90)  # 適用後のページだけを更に変更
+
+    assert window._shortcut_presets["A"] is stored_before
+    assert window._shortcut_presets["A"].rotate == 0  # プリセット側は影響を受けない
+
+
+def test_save_shortcut_preset_copies_rather_than_aliases(window):
+    """保存後に元のページを変更しても、保存済みプリセットは変わらない。"""
+    window.select_layout(layouts.layout_ids().index("six_2col"))
+    window.save_shortcut_preset("A")
+
+    window.set_rotation(90)  # 保存後にページ側だけ変更
+
+    assert window._shortcut_presets["A"].rotate == 0
+
+
+def test_shortcut_presets_persist_across_windows(qapp, article_pdfs, tmp_path, monkeypatch):
+    """保存した割り当ては、アプリを再起動しても（＝新しい MainWindow でも）引き継がれる。"""
+    from inkflow.gui import shortcut_presets
+
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr(shortcut_presets, "config_path", lambda: config_file)
+
+    project = builder.project_from_pdfs(
+        article_pdfs, title="月刊テスト", issue="2026年8月号", device_id=TEST_DEVICE
+    )
+    first = MainWindow(project)
+    try:
+        first.select_layout(layouts.layout_ids().index("third_v"))
+        first.save_shortcut_preset("G")
+    finally:
+        first.preview_cache.close()
+        first.deleteLater()
+
+    second = MainWindow(Project())
+    try:
+        assert second._shortcut_presets["G"] is not None
+        assert second._shortcut_presets["G"].layout_id == "third_v"
+        assert "上中下3分割" in second.shortcut_preset_labels["G"].text()
+    finally:
+        second.preview_cache.close()
+        second.deleteLater()
+
+
+def test_shortcut_preset_on_empty_project_is_safe(qapp):
+    win = MainWindow(Project())
+    try:
+        win.save_shortcut_preset("A")  # 現在ページが無いので何も起きないはず
+        win.apply_shortcut_preset("A")
+    finally:
+        win.preview_cache.close()
+        win.deleteLater()
 
 
 def test_apply_same_as_previous_copies_and_advances(window):
